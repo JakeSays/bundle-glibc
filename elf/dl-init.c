@@ -34,8 +34,8 @@ call_init (struct link_map *l, int argc, char **argv, char **env)
      need relocation.)  */
   assert (l->l_relocated || l->l_type == lt_executable);
 
-  if (l->l_init_called)
-    /* This object is all done.  */
+  if (l->l_init_called || l->l_proxy)
+    /* This object is all done, or a proxy (and therefore initless).  */
     return;
 
   /* Avoid handling this constructor again in case we have a circular

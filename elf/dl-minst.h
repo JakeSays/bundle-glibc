@@ -33,6 +33,15 @@ struct minst_member
 {
   off_t offset;
   size_t size;
+  /* The member belongs to the runtime bundle, so the process must hold exactly one instance of it
+     however many namespaces there are.  A second copy of libc is a second malloc arena, a second
+     errno and a second set of locale state, and a pointer allocated on one side cannot be freed on
+     the other.
+
+     This is what DT_GNU_FLAGS_1/DF_GNU_1_UNIQUE was invented to record.  An artifact does not need
+     the tag: which bundle a member came from says the same thing, and says it from the index rather
+     than from the file.  */
+  bool unique;
 };
 
 /* Finds the artifact and reads the bundles it carries.
@@ -58,6 +67,11 @@ extern int _dl_minst_fd (void) attribute_hidden;
    and its dependency closure cannot even be enumerated ahead of time.  */
 extern bool _dl_minst_sealed (void) attribute_hidden;
 
+/* Whether to trace what the loader does to stderr.  The environment cannot ask for this -- a loader
+   that ignores the environment ignores LD_DEBUG with it -- so the artifact carries the switch, and an
+   artifact that misbehaves somewhere unreproducible can be rebuilt with it and run there.  */
+extern bool _dl_minst_trace (void) attribute_hidden;
+
 /* Whether LD_PRELOAD, LD_LIBRARY_PATH and GLIBC_TUNABLES should be emptied in the environment.
    Nothing here reads them either way; this is about what is left for the payload and for whatever
    the payload starts, which is a separate question with a separate answer.  */
@@ -77,6 +91,20 @@ extern bool _dl_minst_main (struct minst_member *member) attribute_hidden;
    the mapping machinery in dl-load.c, where the filebuf and open_verify live.  */
 extern struct link_map *_dl_map_object_from_bundle (ElfW(Off) base_off, int type, int mode,
 						    Lmid_t nsid) attribute_hidden;
+
+/* The namespace host objects are loaded into, made on first use.  Only meaningful for an artifact
+   that may reach the machine at all; a sealed one never asks.  */
+extern Lmid_t _dl_minst_host_namespace (void) attribute_hidden;
+
+/* Whether NAME has to come off the machine, and so belongs in the host namespace rather than beside
+   the payload.  False for everything when the artifact is sealed, since then nothing does.  */
+extern bool _dl_minst_belongs_to_host (const char *name);
+rtld_hidden_proto (_dl_minst_belongs_to_host)
+
+/* Gives everything placed in the host namespace its dependency closure, which the payload's own walk
+   cannot do because what it sees of a host library is a proxy with nothing to walk.  Called once the
+   payload's closure is complete and before anything is relocated.  */
+extern void _dl_minst_finish_host_namespace (void) attribute_hidden;
 
 /* Opens a data member as though it were a file of its own, or -1 when there is no such member.
 

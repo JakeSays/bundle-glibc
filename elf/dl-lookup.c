@@ -25,6 +25,7 @@
 #include <dl-machine.h>
 #include <dl-new-hash.h>
 #include <dl-protected.h>
+#include <dl-dst.h>
 #include <sysdep-cancel.h>
 #include <libc-lock.h>
 #include <tls.h>
@@ -844,11 +845,31 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
 	}
     }
 
+  /* The symbol was found in the base namespace while the object referencing it lives in another
+     one.  What that object should be bound to is the proxy standing for the definition here, which
+     will already exist by this point, rather than the base namespace's own link_map.
+
+     The loader itself is exempt: it is genuinely one object shared by every namespace, is never
+     proxied, and a copy of its link_map is what secondary namespaces get instead.  */
+  if (__glibc_likely (current_value.m != NULL
+		      && !is_rtld_link_map (current_value.m)))
+    if (__glibc_unlikely (undef_map->l_ns != LM_ID_BASE &&
+                          current_value.m->l_ns == LM_ID_BASE))
+      {
+        struct link_map *proxy = NULL;
+        proxy = _dl_find_proxy (undef_map->l_ns, current_value.m->l_name);
+
+        if (proxy != NULL)
+          current_value.m = proxy;
+        else
+          _dl_debug_printf ("Failed to find proxy for %s\n", current_value.m->l_name);
+      }
+
   /* We have to check whether this would bind UNDEF_MAP to an object
      in the global scope which was dynamically loaded.  In this case
      we have to prevent the latter from being unloaded unless the
      UNDEF_MAP object is also unloaded.  */
-  if (__glibc_unlikely (current_value.m->l_type == lt_loaded)
+  if (__glibc_unlikely (current_value.m->l_real->l_type == lt_loaded)
       /* Don't do this for explicit lookups as opposed to implicit
 	 runtime lookups.  */
       && (flags & DL_LOOKUP_ADD_DEPENDENCY) != 0
@@ -862,8 +883,8 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
 				  version, type_class, flags, skip_map);
 
   /* The object is used.  */
-  if (__glibc_unlikely (current_value.m->l_used == 0))
-    current_value.m->l_used = 1;
+  if (__glibc_unlikely (current_value.m->l_real->l_used == 0))
+    current_value.m->l_real->l_used = 1;
 
  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_BINDINGS))
    {
@@ -883,5 +904,10 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
 
 
   *ref = current_value.s;
-  return LOOKUP_VALUE (current_value.m);
+
+  /* Through the proxy to the object it stands for.  A symbol found in a proxy lives in the real
+     object's mapping, and a caller handed the proxy would be given a link_map with none of the
+     addresses it needs.  For anything that is not a proxy l_real points at itself, so this is the
+     same value it always was.  */
+  return LOOKUP_VALUE (current_value.m->l_real);
 }

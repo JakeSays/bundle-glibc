@@ -1969,6 +1969,143 @@ open_path (const char *name, size_t namelen, int mode,
   return -1;
 }
 
+#ifdef SHARED
+/* The namespace host objects are loaded into, made the first time one is needed.
+
+   One for the process, not one per delegated subtree.  Host libraries are meant to resolve against
+   each other -- a driver and the libraries it was built alongside -- and splitting them further
+   would reintroduce between two host objects exactly the duplication this exists to prevent.
+
+   LM_ID_BASE stands for "not yet made", which is safe because the base namespace is never this.  */
+static Lmid_t minst_host_ns = LM_ID_BASE;
+
+Lmid_t
+_dl_minst_host_namespace (void)
+{
+  if (minst_host_ns != LM_ID_BASE)
+    return minst_host_ns;
+
+  Lmid_t nsid;
+  for (nsid = 1; DL_NNS > 1 && nsid < GL(dl_nns); ++nsid)
+    if (GL(dl_ns)[nsid]._ns_loaded == NULL)
+      break;
+
+  if (__glibc_unlikely (nsid == DL_NNS))
+    _dl_signal_error (EINVAL, NULL, NULL,
+		      N_("no namespace available for host objects"));
+
+  if (nsid == GL(dl_nns))
+    {
+      __rtld_lock_initialize (GL(dl_ns)[nsid]._ns_unique_sym_table.lock);
+      ++GL(dl_nns);
+    }
+
+  GL(dl_ns)[nsid].libc_map = NULL;
+  _dl_debug_change_state (_dl_debug_update (nsid), RT_CONSISTENT);
+
+  minst_host_ns = nsid;
+  return nsid;
+}
+
+/* Builds the dependency closure of everything placed in the host namespace.
+
+   The payload's own walk cannot do this.  What it sees for a host library is the proxy standing in
+   the base namespace, and a proxy carries no dynamic information -- no DT_NEEDED, nothing to walk --
+   so the real object's dependencies are nobody's job until they are made somebody's here.  Without
+   it the object has an empty search scope, and relocating against an empty scope is what the first
+   attempt at this crashed on.
+
+   Run after the payload's closure is complete, so that everything the placement rule was going to
+   put next door is already there, and before relocation, which is what needs the scope.  Repeated
+   until it settles: resolving one object's dependencies can place more.  */
+void
+_dl_minst_finish_host_namespace (void)
+{
+  if (minst_host_ns == LM_ID_BASE)
+    return;
+
+  bool again = true;
+  while (again)
+    {
+      again = false;
+
+      for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+	if (l->l_searchlist.r_list == NULL && !l->l_proxy)
+	  {
+	    if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+	      _dl_debug_printf ("minst: closing over %s [%lu]\n", l->l_name, l->l_ns);
+
+	    _dl_map_object_deps (l, NULL, 0, 0, 0);
+	    again = true;
+	    break;
+	  }
+    }
+
+  /* And their symbol version tables, which the startup pass builds only for the base namespace.
+     Relocation reads l_versions without checking it exists -- it indexes straight into the array --
+     so an object arriving here without one faults on the first versioned symbol it has to resolve
+     rather than reporting anything.  Through l_real, because a proxy has no versions of its own and
+     the object it stands for already has them.  */
+  for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+    if (l->l_real->l_versions == NULL)
+      _dl_check_map_versions (l->l_real, 0, 0);
+}
+
+/* Whether NAME should be resolved off the machine and therefore belongs in the host namespace.
+
+   The loader is excluded explicitly.  It is not a bundle member as far as a name lookup is concerned
+   -- the index hides the runtime bundle's starting member so that libc.so.6's DT_NEEDED on it binds
+   to the loader already running rather than mapping a second copy -- so without this it would look
+   like something to fetch from the machine, which is how the host's ld.so once ended up mapped into
+   a namespace beside our own.  */
+bool
+_dl_minst_belongs_to_host (const char *name)
+{
+  if (_dl_minst_sealed ())
+    return false;
+
+  if (_dl_name_match_p (name, &_dl_rtld_map))
+    return false;
+
+  struct minst_member member;
+  return !_dl_minst_find (name, &member);
+}
+rtld_hidden_def (_dl_minst_belongs_to_host)
+#endif
+
+/* The proxy of NAME in NSID, or NULL if the namespace holds nothing by that name.
+
+   An object of that name which is not a proxy is an error rather than a miss: it is already loaded
+   in its own right here, and the request being served asks for it to be a stand-in for the copy in
+   another namespace.  Those cannot both be true of one link_map, and quietly returning the real one
+   would give the caller shared semantics it did not get.  */
+struct link_map *
+_dl_find_proxy (Lmid_t nsid, const char *name)
+{
+  struct link_map *l;
+
+  for (l = GL(dl_ns)[nsid]._ns_loaded; l != NULL; l = l->l_next)
+    {
+      if (__glibc_unlikely ((l->l_faked | l->l_removed) != 0))
+	continue;
+
+      if (_dl_name_match_p (name, l))
+	break;
+    }
+
+  if (l != NULL)
+    {
+      if (l->l_proxy)
+	return l;
+
+      _dl_signal_error (EEXIST, name, NULL,
+			N_("object cannot be demoted to a proxy"));
+    }
+
+  return NULL;
+}
+rtld_hidden_def (_dl_find_proxy)
+
 struct link_map *
 _dl_lookup_map (Lmid_t nsid, const char *name)
 {
@@ -2307,8 +2444,24 @@ _dl_map_new_object (struct link_map *loader, const char *name,
     }
 
   void *stack_end = __libc_stack_end;
-  return _dl_map_object_from_fd (name, origname, fd, base_off, &fb, realname, loader,
-				 type, mode, stack_end, nsid);
+  struct link_map *mapped = _dl_map_object_from_fd (name, origname, fd, base_off, &fb, realname,
+						    loader, type, mode, stack_end, nsid);
+
+#ifdef SHARED
+  /* Record on the object what the index said about it, so that everything downstream asking whether
+     there may be only one of this can ask the object rather than the bundle.  That is the same
+     question DF_GNU_1_UNIQUE answers for a DSO that carries the tag, and this is the same bit: a
+     member set is not obliged to be built with a linker that knows about it, and an artifact should
+     not need one.  */
+  if (mapped != NULL)
+    {
+      struct minst_member member;
+      if (_dl_minst_find (name, &member) && member.unique)
+	mapped->l_gnu_flags_1 |= DF_GNU_1_UNIQUE;
+    }
+#endif
+
+  return mapped;
 }
 
 /* Maps a member of the artifact that nothing asks for by name.  The program is one such: the index
@@ -2349,9 +2502,79 @@ struct link_map *
 _dl_map_object (struct link_map *loader, const char *name,
 		int type, int trace_mode, int mode, Lmid_t nsid)
 {
+  assert (!((mode & RTLD_ISOLATE) && (mode & RTLD_SHARED)));
+
+#ifdef SHARED
+  /* Not carried, and the machine may be reached: it belongs in the host namespace, with a proxy left
+     here so whatever asked can bind to it.
+
+     This is the placement rule and it runs before anything else, because it decides which namespace
+     the rest of this call is about.  Objects the artifact carries stay where they are; everything
+     from the machine goes next door, taking its own dependencies with it, so a host library's idea
+     of libzstd is resolved among host libraries and never against the payload's.
+
+     The recursion terminates: the nested call runs with the host namespace, and this branch only
+     fires for the base one.  */
+  if (__glibc_unlikely (nsid == LM_ID_BASE && !(mode & RTLD_ISOLATE)
+			&& _dl_minst_belongs_to_host (name)))
+    {
+      Lmid_t host = _dl_minst_host_namespace ();
+      struct link_map *real = _dl_map_object (loader, name, type, trace_mode, mode, host);
+
+      if (real == NULL || real->l_ns == LM_ID_BASE)
+	return real;
+
+      struct link_map *proxy = _dl_find_proxy (LM_ID_BASE, name);
+      return proxy != NULL ? proxy : _dl_new_proxy (real, mode, LM_ID_BASE);
+    }
+
+  /* A runtime-bundle member asked for from anywhere but the base namespace is shared whether or not
+     sharing was requested.  Nothing has to ask, and nothing sensibly could: the request that matters
+     is a host object's DT_NEEDED on libc.so.6, which is emitted by a linker that knows nothing about
+     any of this.
+
+     Recorded on the member rather than read from the object's dynamic section, so the answer is known
+     from the name before anything is opened.  RTLD_ISOLATE is the way to say no and get a private
+     copy, which is a thing to ask for explicitly and never a default.  */
+  if (__glibc_unlikely (nsid != LM_ID_BASE && !(mode & RTLD_ISOLATE)))
+    {
+      struct minst_member member;
+      if (_dl_minst_find (name, &member) && member.unique)
+	mode |= RTLD_SHARED;
+    }
+
+  /* Sharing into the base namespace is a contradiction -- that is where the real objects live -- so
+     there is nothing to check unless another namespace was asked for.  */
+  if (__glibc_unlikely ((mode & RTLD_SHARED) && nsid != LM_ID_BASE))
+    {
+      struct link_map *proxy = _dl_find_proxy (nsid, name);
+      if (proxy != NULL)
+	return proxy;
+
+      /* Nothing stands for it here yet, so look for the real object where real objects are.  The
+	 proxy is made by dl_open_worker once this one is initialized, which is why the namespace
+	 that was asked for is remembered there rather than here.  */
+      nsid = LM_ID_BASE;
+    }
+#endif
+
   struct link_map *l = _dl_lookup_map (nsid, name);
   if (l != NULL)
-    return l;
+    {
+#ifdef SHARED
+      /* Loaded here in its own right, in a namespace that is not the base one, and marked as
+	 something there may only ever be one of.  Both cannot hold, and the earlier open is the one
+	 that already happened, so this request is the one that fails.  */
+      if (!(mode & RTLD_ISOLATE)
+	  && l->l_ns != LM_ID_BASE
+	  && (l->l_gnu_flags_1 & DF_GNU_1_UNIQUE)
+	  && !l->l_proxy)
+	_dl_signal_error (EEXIST, name, NULL,
+			  N_("object cannot be demoted to a proxy"));
+#endif
+      return l;
+    }
+
   return _dl_map_new_object (loader, name, type, trace_mode, mode, nsid);
 }
 

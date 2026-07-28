@@ -77,6 +77,12 @@ _dl_minst_blank_env (void)
   return (minst_flags () & MINST_BUNDLE_BLANK_ENV) != 0;
 }
 
+bool
+_dl_minst_trace (void)
+{
+  return (minst_flags () & MINST_BUNDLE_TRACE) != 0;
+}
+
 /* Reads exactly LENGTH bytes, or says it could not.  Every caller here wants a whole header or a
    whole table; a short read of one is not something to carry on from.  */
 static bool
@@ -267,6 +273,7 @@ _dl_minst_find (const char *name, struct minst_member *member)
 
 	  member->offset = entry->offset;
 	  member->size = entry->size;
+	  member->unique = (bundle->header->type == MINST_BUNDLE_RUNTIME);
 	  return true;
 	}
     }
@@ -336,6 +343,8 @@ _dl_minst_main (struct minst_member *member)
 
 	  member->offset = entry->offset;
 	  member->size = entry->size;
+	  /* The program, which is loaded once into the base namespace and is nothing's dependency.  */
+	  member->unique = false;
 	  return true;
 	}
     }

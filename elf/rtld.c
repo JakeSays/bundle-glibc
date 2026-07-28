@@ -651,7 +651,7 @@ dlmopen_doit (void *a)
   struct dlmopen_args *args = (struct dlmopen_args *) a;
   args->map = _dl_open (args->fname,
 			(RTLD_LAZY | __RTLD_DLOPEN | __RTLD_AUDIT
-			 | __RTLD_SECURE),
+			 | __RTLD_SECURE | RTLD_ISOLATE),
 			dl_main, LM_ID_NEWLM, _dl_argc, _dl_argv,
 			__environ);
 }
@@ -1366,6 +1366,17 @@ dl_main (const ElfW(Phdr) *phdr,
     _dl_minst_open (execfn);
   }
 
+  /* Tracing, if the artifact asked to be built with it.  LD_DEBUG is not read here and will not be:
+     what an artifact does must not depend on the environment it meets.  So the request travels in the
+     bundle instead, which also means it can be turned on for a machine where something goes wrong
+     rather than only for the machine the loader was built on.
+
+     Set here, immediately after the artifact is open and before anything is resolved, so the trace
+     covers the whole of startup rather than beginning partway through it.  */
+  if (_dl_minst_trace ())
+    GLRO(dl_debug_mask) = (DL_DEBUG_FILES | DL_DEBUG_LIBS | DL_DEBUG_RELOC
+			   | DL_DEBUG_BINDINGS | DL_DEBUG_SCOPES);
+
   /* Empty what the artifact asked to have emptied.
      Nothing here is read by this loader whatever the artifact says -- that is what stops the
      artifact being redirected, and it is not optional.  This is about what is left behind: a
@@ -1869,6 +1880,11 @@ dl_main (const ElfW(Phdr) *phdr,
     rtld_timer_accum (&load_time, start);
   }
 
+  /* Anything the walk above sent to the host namespace arrived there as a bare mapping: what the
+     payload's closure holds is the proxy, and a proxy has no dependencies to walk.  Give the real
+     objects their own closure now, while there is still a relocation pass ahead of them.  */
+  _dl_minst_finish_host_namespace ();
+
   /* Mark all objects as being in the global scope.  */
   for (i = main_map->l_searchlist.r_nlist; i > 0; )
     main_map->l_searchlist.r_list[--i]->l_global = 1;
@@ -2222,6 +2238,13 @@ dl_main (const ElfW(Phdr) *phdr,
 	  }
 	/* Also allocated with the fake malloc().  */
 	l->l_free_initfini = 0;
+
+	/* Through a proxy to the object it stands for.  A proxy carries no dynamic information of
+	   its own -- relocating one would walk an l_info that is entirely NULL -- and what needs
+	   relocating is the real object, in the namespace it actually lives in.  For anything that
+	   is not a proxy l_real points at itself, and _dl_relocate_object returns immediately for
+	   anything already done, so this neither skips work nor repeats it.  */
+	l = l->l_real;
 
 	_dl_relocate_object (l, l->l_scope, GLRO(dl_lazy) ? RTLD_LAZY : 0,
 			     consider_profiling);

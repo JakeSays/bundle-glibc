@@ -1005,6 +1005,11 @@ extern lookup_t _dl_lookup_symbol_x (const char *undef,
 				     struct link_map *skip_map)
      attribute_hidden;
 
+/* Proxy an existing link map entry into a new link map */
+extern struct link_map *_dl_new_proxy (struct link_map *old,
+				       int mode,
+				       Lmid_t nsid)
+     attribute_hidden;
 
 /* Restricted version of _dl_lookup_symbol_x.  Searches MAP (and only
    MAP) for the symbol UNDEF_NAME, with GNU hash NEW_HASH (computed
@@ -1324,6 +1329,12 @@ rtld_hidden_proto (_dl_find_dso_for_object)
 extern enum dl_readonly_area_error_type _dl_readonly_area (const void *ptr,
 							   size_t size)
      attribute_hidden;
+
+/* The proxy of NAME in namespace NSID, or NULL if there is not one.  The object being stood for is
+   found with _dl_lookup_map, which is this release's name for the search the proxying work
+   originally added for itself.  */
+extern struct link_map *_dl_find_proxy (Lmid_t nsid, const char *name);
+rtld_hidden_proto (_dl_find_proxy)
 
 /* Initialization which is normally done by the dynamic linker.  */
 extern void _dl_non_dynamic_init (void)

@@ -184,7 +184,20 @@ elf_get_dynamic_info (struct link_map *l, bool bootstrap,
     if (info[DT_RUNPATH] != NULL)
       /* If both RUNPATH and RPATH are given, the latter is ignored.  */
       info[DT_RPATH] = NULL;
-   }
-}
 
+    if (info[DT_VALTAGIDX (DT_GNU_FLAGS_1)
+	     + DT_NUM + DT_THISPROCNUM + DT_VERSIONTAGNUM + DT_EXTRANUM]
+	!= NULL)
+      {
+	l->l_gnu_flags_1 = info[DT_VALTAGIDX (DT_GNU_FLAGS_1)
+				+ DT_NUM + DT_THISPROCNUM
+				+ DT_VERSIONTAGNUM + DT_EXTRANUM]->d_un.d_val;
+
+	if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES)
+	    && l->l_gnu_flags_1 & ~DT_GNU_1_SUPPORTED_MASK)
+	  _dl_debug_printf ("\nWARNING: Unsupported flag value(s) of 0x%x in DT_GNU_FLAGS_1.\n",
+			    l->l_gnu_flags_1 & ~DT_GNU_1_SUPPORTED_MASK);
+      }
+    }
+}
 #endif
