@@ -790,6 +790,22 @@ do_preload (const char *fname, struct link_map *main_map, const char *where)
   struct map_args args;
   bool malloced;
 
+  /* Anything the artifact carries is left alone.  Not because of which file would be opened -- the
+     bundle answers first, so it would be ours either way -- but because of where it would land.  A
+     preloaded object is inserted ahead of the main program's dependencies and interposes on
+     everything after it, so honoring such an entry would let a file on the host promote one of the
+     artifact's own libraries to interposition position and rearrange a scope its author never
+     offered to have rearranged.  It would also serve nobody: what the administrator wanted was the
+     host's build of that library and the hooks in it, which ours does not have.
+
+     Entries here are usually absolute paths and a member is matched by its final component, so this
+     catches a host path whenever its basename names something carried.
+
+     Silently, since nothing failed and there is nothing for anyone to do about it.  */
+  struct minst_member carried;
+  if (_dl_minst_find (fname, &carried))
+    return 0;
+
   args.str = fname;
   args.loader = main_map;
   args.mode = __RTLD_SECURE;
@@ -1735,8 +1751,18 @@ dl_main (const ElfW(Phdr) *phdr,
      open().  So we do this first.  If it succeeds we do almost twice
      the work but this does not matter, since it is not for production
      use.  */
+  /* Not consulted at all by a sealed artifact.  Unlike the environment variables, this is not
+     inherited state that could be decided for anything downstream: a process the payload starts is a
+     host binary run by the host's loader, which reads this file for itself whatever we do here.  The
+     only question is whether this process honors it.
+
+     Sealed, it must not -- no host code enters, and this file would otherwise be the one way in.
+     Unsealed, it does, because host libraries are already entering the base namespace and already
+     interposing; refusing the machine's preload would add nothing while breaking artifacts on the
+     hosts where that file is load-bearing, which is the case allowing the host exists for.  */
   static const char preload_file[] = "/etc/ld.so.preload";
-  if (__glibc_unlikely (__access (preload_file, R_OK) == 0))
+  if (!_dl_minst_sealed ()
+      && __glibc_unlikely (__access (preload_file, R_OK) == 0))
     {
       /* Read the contents of the file.  */
       file = _dl_sysdep_read_whole_file (preload_file, &file_size,

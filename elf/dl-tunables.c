@@ -331,7 +331,21 @@ __tunables_init (char **envp, char **argv)
   const struct tunable_header_cached *thc;
   const char *td;
 
-  thc = _dl_load_cache_tunables (&td);
+  /* Nothing from the host's cache.
+     2.44 added a second route into the settings below: /etc/tunables.conf, compiled by ldconfig into
+     /etc/ld.so.cache and read from here.  It arrives by a different door than GLIBC_TUNABLES, early
+     enough that the artifact has not been opened yet, and it is refused for a reason that does not
+     depend on the ordering.  Those settings were written for the host's glibc, which is a different
+     build and may be a different version with different tunable names and meanings, while the libc
+     that runs is always the one the artifact carries.  That holds whether or not the artifact is
+     sealed: letting libraries it does not carry come from the machine is not an invitation for the
+     machine's glibc configuration to govern the glibc it brought with it.
+
+     Refused here rather than by deleting what follows, so that a release changing any of it conflicts
+     visibly instead of merging into code nothing runs.  */
+  thc = NULL;
+  td = NULL;
+
   if (thc != NULL)
     {
       for (int t = 0; t < thc->num_tunables; ++ t)
@@ -468,7 +482,7 @@ __tunables_init (char **envp, char **argv)
     }
 #endif /* defined(SHARED) && defined (USE_LDCONFIG) */
 
-  /* Nothing from the environment.
+  /* Nothing from the environment either.
      Tunables keep the values this runtime was built with.  They are not a way to load anything,
      which is why they are easy to overlook, but glibc.cpu.hwcaps decides which IFUNC variant of
      memcpy and its neighbors the process runs, and glibc.rtld.* changes how the loader behaves.  An
