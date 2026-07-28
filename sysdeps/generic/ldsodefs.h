@@ -679,6 +679,16 @@ struct rtld_global_ro
      if memory area is within a read-only ELF segment.  */
   enum dl_readonly_area_error_type (*_dl_readonly_area) (const void *, size_t);
 
+  /* Opens a data member of the artifact as though it were a file of its own, or returns -1 when
+     there is no artifact or no such member.
+
+     Objects reach the artifact through _dl_map_object and need nothing here.  These are the things
+     that are not objects: gconv's module list and the locale archive, which libc opens by a path
+     built from a directory compiled in when this runtime was configured -- a directory describing a
+     machine the artifact is not running on.  The code that reads them lives in libc rather than in
+     the loader, so it asks through here.  */
+  int (*_dl_minst_open_member) (const char *name);
+
   /* Dynamic linker operations used after static dlopen.  */
   const struct dlfcn_hook *_dl_dlfcn_hook;
 

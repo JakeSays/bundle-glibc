@@ -46,6 +46,7 @@
 
 #include <dl-dst.h>
 #include <dl-load.h>
+#include <dl-minst.h>
 #include <dl-map-segments.h>
 #include <dl-map-segment-align.h>
 #include <dl-unmap-segments.h>
@@ -955,11 +956,12 @@ _dl_notify_new_object (int mode, Lmid_t nsid, struct link_map *l)
    precomputed fields so the caller's scan loop can fill them in.  */
 static void
 _dl_pt_load_iterator_init (struct dl_pt_load_iterator *it, int fd,
-			   struct filebuf *fbp, ElfW(Off) phoff,
-			   uint16_t phnum)
+			   struct filebuf *fbp, ElfW(Off) base_off,
+			   ElfW(Off) phoff, uint16_t phnum)
 {
   it->fd = fd;
   it->fbp = fbp;
+  it->base_off = base_off;
   it->phoff = phoff;
   it->phnum = phnum;
   it->idx = 0;
@@ -1013,7 +1015,10 @@ _dl_map_object_scan_phdrs (struct dl_pt_load_iterator *it,
 	    ElfW(Addr) mapstart = ALIGN_DOWN (ph->p_vaddr, it->pagesize);
 	    ElfW(Addr) mapend = ALIGN_UP (ph->p_vaddr + ph->p_filesz,
 					  it->pagesize);
-	    ElfW(Off)  mapoff = ALIGN_DOWN (ph->p_offset, it->pagesize);
+	    /* Where the segment sits in the file being mapped, which for a member of an artifact is
+	       past where that member begins.  Both terms are page aligned, so the sum is too, and
+	       the congruence mmap needs is preserved.  */
+	    ElfW(Off)  mapoff = it->base_off + ALIGN_DOWN (ph->p_offset, it->pagesize);
 	    int prot = pf_to_prot (ph->p_flags);
 	    if (powerof2 (ph->p_align) && ph->p_align > it->p_align_max)
 	      it->p_align_max = ph->p_align;
@@ -1116,6 +1121,7 @@ static
 #endif
 struct link_map *
 _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+			ElfW(Off) base_off,
 			struct filebuf *fbp, char *realname,
 			struct link_map *loader, int l_type, int mode,
 			const void *stack_endp, Lmid_t nsid)
@@ -1143,6 +1149,30 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 	  free (realname);
 	  realname = realname_can;
 	}
+    }
+  else if (base_off != 0)
+    {
+      /* Members of an artifact are all one file, so asking the filesystem who this is would answer
+	 with the artifact and every member would come back wearing the same identity -- which the
+	 search below reads as "already loaded", handing out whichever member happened to be mapped
+	 first.  A gconv module resolved to libc is how that shows up.
+
+	 What distinguishes them is where they start, which is unique by construction and stable for
+	 the life of the file.  The device is set to something no real one can be so the pair cannot
+	 collide with a genuine file's.  */
+      id.dev = (dev_t) -1;
+      id.ino = (ino64_t) base_off;
+
+      for (l = GL(dl_ns)[nsid]._ns_loaded; l != NULL; l = l->l_next)
+	if (!l->l_removed && _dl_file_id_match_p (&l->l_file_id, &id))
+	  {
+	    __close_nocancel (fd);
+	    free (realname);
+	    if (name != l->l_name && strcmp (name, l->l_name) != 0)
+	      add_name_to_object (l, name);
+	    ++l->l_direct_opencount;
+	    return l;
+	  }
     }
   else
     {
@@ -1265,7 +1295,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
     bool has_holes;
     bool empty_dynamic = false;
 
-    _dl_pt_load_iterator_init (&it, fd, fbp, header.e_phoff, l->l_phnum);
+    _dl_pt_load_iterator_init (&it, fd, fbp, base_off, header.e_phoff, l->l_phnum);
     has_holes = false;
 
     errstring = _dl_map_object_scan_phdrs (&it, l, mode, &stack_flags,
@@ -1348,7 +1378,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 	  goto lose_errno;
 	}
       if ((size_t) __pread64_nocancel (fd, newp, phdr_size,
-				       header.e_phoff) != phdr_size)
+				       base_off + header.e_phoff) != phdr_size)
 	{
 	  free (newp);
 	  errstring = N_("cannot read file data");
@@ -1563,7 +1593,7 @@ print_search_path (struct r_search_path_elem **list,
    If FD is not -1, then the file is already open and FD refers to it.
    In that case, FD is consumed for both successful and error returns.  */
 static int
-open_verify (const char *name, int fd,
+open_verify (const char *name, int fd, ElfW(Off) base_off,
              struct filebuf *fbp, struct link_map *loader,
 	     int whatcode, int mode, bool *found_other_class, bool free_name)
 {
@@ -1625,11 +1655,14 @@ open_verify (const char *name, int fd,
       __set_errno (0);
       fbp->len = 0;
       assert (sizeof (fbp->buf) > sizeof (ElfW(Ehdr)));
-      /* Read in the header.  */
+      /* Read in the header.  Positioned rather than sequential: an object that is a member of an
+	 artifact begins at BASE_OFF inside the file, and the descriptor is shared with every other
+	 member, so nothing here may depend on or disturb the file position.  */
       do
 	{
-	  ssize_t retlen = __read_nocancel (fd, fbp->buf + fbp->len,
-					    sizeof (fbp->buf) - fbp->len);
+	  ssize_t retlen = __pread64_nocancel (fd, fbp->buf + fbp->len,
+					       sizeof (fbp->buf) - fbp->len,
+					       base_off + fbp->len);
 	  if (retlen <= 0)
 	    break;
 	  fbp->len += retlen;
@@ -1826,7 +1859,7 @@ open_path (const char *name, size_t namelen, int mode,
 	  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_LIBS))
 	    _dl_debug_printf ("  trying file=%s\n", buf);
 
-	  fd = open_verify (buf, -1, fbp, loader, whatcode, mode,
+	  fd = open_verify (buf, -1, 0, fbp, loader, whatcode, mode,
 			    found_other_class, false);
 	  if (this_dir->status[cnt] == unknown)
 	    {
@@ -1981,6 +2014,10 @@ _dl_map_new_object (struct link_map *loader, const char *name,
   struct link_map *l;
   struct filebuf fb;
 
+  /* Where the object begins in whatever FD ends up referring to.  Zero for a file opened by name,
+     and the member's offset for something resolved out of the artifact.  */
+  ElfW(Off) base_off = 0;
+
   /* Display information if we are debugging.  */
   if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES)
       && loader != NULL)
@@ -2009,7 +2046,50 @@ _dl_map_new_object (struct link_map *loader, const char *name,
     }
 #endif
 
-  if (strchr (name, '/') == NULL)
+  /* The artifact first, and for a sealed one, only.
+     What the artifact carries always wins, so a name that is bundled is never resolved to something
+     on the machine that happens to share it.  What happens when it is not carried is the artifact's
+     to say: a sealed one stops here, and one that delegates part of its work to the host falls
+     through to the search below.  That second case is not a fallback anyone should reach for --
+     an artifact that quietly resolves to the machine works where it was built and fails elsewhere --
+     but a graphics stack cannot be bundled and its closure cannot be enumerated ahead of time, since
+     the driver is chosen at run time by what hardware is there.
+
+     The descriptor is duplicated rather than shared.  open_verify consumes the descriptor it is
+     given on both success and failure, and _dl_map_object_from_fd closes it once the segments are
+     mapped -- either of which, applied to the artifact's own descriptor, would shut the artifact for
+     every member still to come.  */
+  struct minst_member member;
+  if (_dl_minst_find (name, &member))
+    {
+      realname = __strdup (name);
+      if (realname == NULL)
+	fd = -1;
+      else
+	{
+	  base_off = member.offset;
+	  fd = __dup (_dl_minst_fd ());
+	  if (fd == -1)
+	    free (realname);
+	  else
+	    {
+	      fd = open_verify (realname, fd, base_off, &fb,
+				loader ?: GL(dl_ns)[nsid]._ns_loaded, 0, mode,
+				&found_other_class, true);
+	      if (__glibc_unlikely (fd == -1))
+		free (realname);
+	    }
+	}
+    }
+  else if (_dl_minst_sealed ())
+    {
+      /* Carried or not at all.  Nothing is looked for on the machine, and the complaint says so
+	 rather than reporting a file that could not be opened -- there was never a file to open, and
+	 what is missing is a member the artifact should have been built with.  */
+      fd = -1;
+      __set_errno (ENOENT);
+    }
+  else if (strchr (name, '/') == NULL)
     {
       /* Search for NAME in several places.  */
 
@@ -2131,7 +2211,7 @@ _dl_map_new_object (struct link_map *loader, const char *name,
 
 	      if (cached != NULL)
 		{
-		  fd = open_verify (cached, -1,
+		  fd = open_verify (cached, -1, 0,
 				    &fb, loader ?: GL(dl_ns)[nsid]._ns_loaded,
 				    LA_SER_CONFIG, mode, &found_other_class,
 				    false);
@@ -2166,7 +2246,7 @@ _dl_map_new_object (struct link_map *loader, const char *name,
 	fd = -1;
       else
 	{
-	  fd = open_verify (realname, -1, &fb,
+	  fd = open_verify (realname, -1, 0, &fb,
 			    loader ?: GL(dl_ns)[nsid]._ns_loaded, 0, mode,
 			    &found_other_class, true);
 	  if (__glibc_unlikely (fd == -1))
@@ -2227,7 +2307,41 @@ _dl_map_new_object (struct link_map *loader, const char *name,
     }
 
   void *stack_end = __libc_stack_end;
-  return _dl_map_object_from_fd (name, origname, fd, &fb, realname, loader,
+  return _dl_map_object_from_fd (name, origname, fd, base_off, &fb, realname, loader,
+				 type, mode, stack_end, nsid);
+}
+
+/* Maps a member of the artifact that nothing asks for by name.  The program is one such: the index
+   marks it with a flag rather than leaving it to be found by what it is called, and the loader in
+   the runtime bundle is the other.
+
+   Nothing is manufactured for it to be called.  The main map's name is empty, exactly as it is for a
+   program the kernel loaded directly, and what the payload knows itself as comes from argv.  */
+struct link_map *
+_dl_map_object_from_bundle (ElfW(Off) base_off, int type, int mode, Lmid_t nsid)
+{
+  struct filebuf fb;
+  bool found_other_class = false;
+
+  /* Duplicated for the same reason every other member's is: open_verify consumes the descriptor it
+     is handed, and _dl_map_object_from_fd closes it once the segments are mapped.  */
+  int fd = __dup (_dl_minst_fd ());
+  if (fd == -1)
+    _dl_signal_error (errno, NULL, NULL, N_("cannot open shared object file"));
+
+  fd = open_verify ("", fd, base_off, &fb, NULL, 0, mode, &found_other_class, false);
+  if (fd == -1)
+    _dl_signal_error (errno, NULL, NULL, N_("cannot open shared object file"));
+
+  char *realname = __strdup ("");
+  if (realname == NULL)
+    {
+      __close_nocancel (fd);
+      _dl_signal_error (ENOMEM, NULL, NULL, N_("cannot create shared object descriptor"));
+    }
+
+  void *stack_end = __libc_stack_end;
+  return _dl_map_object_from_fd ("", NULL, fd, base_off, &fb, realname, NULL,
 				 type, mode, stack_end, nsid);
 }
 

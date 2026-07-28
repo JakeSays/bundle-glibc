@@ -124,6 +124,11 @@ struct dl_pt_load_iterator
 {
   int fd;                       /* File descriptor for pread.  */
   struct filebuf *fbp;          /* Scratch buffer for batched phdr reads.  */
+  /* Where this object begins within FD.  An artifact carries its members inside itself, so an
+     object's file offsets are relative to where the member starts rather than to the start of the
+     file.  Page aligned, which is what lets the segments be mapped in place: ELF requires p_offset
+     congruent to p_vaddr modulo the page size, and a page aligned base preserves that.  */
+  ElfW(Off) base_off;
   ElfW(Off) phoff;              /* Program header table file offset.  */
   ElfW(Half) phnum;             /* Total number of program headers.  */
   ElfW(Half) idx;               /* Index of next header to read.  */
@@ -163,7 +168,8 @@ _dl_pt_load_iterator_phdr_at (struct dl_pt_load_iterator *it, ElfW(Half) idx)
       if (batch > phdrs_per_buf)
 	batch = phdrs_per_buf;
       size_t bytes = (size_t) batch * sizeof (ElfW(Phdr));
-      ElfW(Off) off = it->phoff + (ElfW(Off)) idx * sizeof (ElfW(Phdr));
+      ElfW(Off) off = it->base_off + it->phoff
+		      + (ElfW(Off)) idx * sizeof (ElfW(Phdr));
       if (__pread64_nocancel (it->fd, it->fbp->buf, bytes, off)
 	  != (ssize_t) bytes)
 	return NULL;
@@ -193,7 +199,10 @@ _dl_pt_load_iterator_next (struct dl_pt_load_iterator *it, struct loadcmd *c)
       c->mapend   = ALIGN_UP (ph->p_vaddr + ph->p_filesz, it->pagesize);
       c->dataend  = ph->p_vaddr + ph->p_filesz;
       c->allocend = ph->p_vaddr + ph->p_memsz;
-      c->mapoff   = ALIGN_DOWN (ph->p_offset, it->pagesize);
+      /* Past where this object begins in the file, which is not the start of it when the object is
+	 a member of an artifact.  Both terms are page aligned, so the sum is, and the congruence
+	 mmap needs between p_offset and p_vaddr is preserved.  */
+      c->mapoff   = it->base_off + ALIGN_DOWN (ph->p_offset, it->pagesize);
       c->prot     = pf_to_prot (ph->p_flags);
       c->mapalign = it->p_align_max;
       return true;

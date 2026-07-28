@@ -69,6 +69,7 @@ dl-routines = \
   dl-lookup \
   dl-lookup-direct \
   dl-minimal-malloc \
+  dl-minst \
   dl-misc \
   dl-object \
   dl-open \

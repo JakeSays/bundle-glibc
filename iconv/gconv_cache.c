@@ -30,6 +30,12 @@
 #include <not-cancel.h>
 #include <pointer_guard.h>
 
+/* For GLRO (dl_minst_open_member).  Guarded for the same reason its use is: only a shared build has
+   a loader to ask.  */
+#ifdef SHARED
+# include <ldsodefs.h>
+#endif
+
 #include "../intl/hash-string.h"
 
 static void *gconv_cache;
@@ -57,8 +63,22 @@ __gconv_load_cache (void)
   if (__gconv_path_envvar != NULL)
     return -1;
 
+  /* The artifact first, if this is running inside one.  GCONV_MODULES_CACHE is built from a prefix
+     compiled in when this runtime was configured, and that prefix names a directory on whatever
+     machine the runtime was built on rather than the one it is running on.
+
+     An artifact carries the cache and not the text configuration it was made from: it is one member
+     instead of a file plus a directory of more files, it is mapped rather than parsed, and a
+     directory is the one thing a bundle cannot offer.  */
+  fd = -1;
+#ifdef SHARED
+  if (GLRO (dl_minst_open_member) != NULL)
+    fd = GLRO (dl_minst_open_member) (GCONV_MODULES_CACHE);
+#endif
+
   /* See whether the cache file exists.  */
-  fd = __open_nocancel (GCONV_MODULES_CACHE, O_RDONLY | O_CLOEXEC, 0);
+  if (fd == -1)
+    fd = __open_nocancel (GCONV_MODULES_CACHE, O_RDONLY | O_CLOEXEC, 0);
   if (__builtin_expect (fd, 0) == -1)
     /* Not available.  */
     return -1;

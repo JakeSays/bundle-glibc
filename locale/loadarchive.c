@@ -28,6 +28,13 @@
 #include <stdint.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+
+/* For GLRO (dl_minst_open_member), which is how a member of the artifact is reached from libc.  Only
+   under SHARED, which is the only configuration that has a loader to ask -- and is the only place
+   the use of it below is compiled.  */
+#ifdef SHARED
+# include <ldsodefs.h>
+#endif
 #include <sys/param.h>
 
 #include "localeinfo.h"
@@ -201,8 +208,19 @@ _nl_load_locale_from_archive (int category, const char **namep)
 	 and failed, so we won't try again.  */
       archmapped = &headmap;
 
-      /* The archive has never been opened.  */
-      fd = __open_nocancel (archfname, O_RDONLY|O_LARGEFILE|O_CLOEXEC);
+      /* The archive has never been opened.  The artifact first, if this is running inside one:
+	 archfname is built from a directory compiled in when this runtime was configured, which
+	 describes a machine the artifact is not running on.  Everything below works in offsets from
+	 the start of what it is given, which is why the member arrives as a file of its own rather
+	 than as the artifact at an offset.  */
+      fd = -1;
+#ifdef SHARED
+      if (GLRO (dl_minst_open_member) != NULL)
+	fd = GLRO (dl_minst_open_member) (archfname);
+#endif
+
+      if (fd < 0)
+	fd = __open_nocancel (archfname, O_RDONLY|O_LARGEFILE|O_CLOEXEC);
       if (fd < 0)
 	/* Cannot open the archive, for whatever reason.  */
 	return NULL;
@@ -397,8 +415,13 @@ _nl_load_locale_from_archive (int category, const char **namep)
 	  if (fd == -1)
 	    {
 	      struct __stat64_t64 st;
-	      fd = __open_nocancel (archfname,
-				    O_RDONLY|O_LARGEFILE|O_CLOEXEC);
+#ifdef SHARED
+	      if (GLRO (dl_minst_open_member) != NULL)
+		fd = GLRO (dl_minst_open_member) (archfname);
+#endif
+	      if (fd == -1)
+		fd = __open_nocancel (archfname,
+				      O_RDONLY|O_LARGEFILE|O_CLOEXEC);
 	      if (fd == -1)
 		/* Cannot open the archive, for whatever reason.  */
 		return NULL;

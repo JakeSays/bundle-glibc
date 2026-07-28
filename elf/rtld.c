@@ -34,6 +34,7 @@
 #include <libc-lock.h>
 #include <unsecvars.h>
 #include <dl-cache.h>
+#include <dl-minst.h>
 #include <dl-osinfo.h>
 #include <dl-reseed-random.h>
 #include <dl-prop.h>
@@ -455,6 +456,7 @@ _dl_start_final (void *arg, struct dl_start_final_info *info)
      interfere with __rtld_static_init.  */
   GLRO (dl_find_object) = &_dl_find_object;
   GLRO (dl_readonly_area) = &_dl_readonly_area;
+  GLRO (dl_minst_open_member) = &_dl_minst_open_member;
 
   /* If it hasn't happen yet record the startup time.  */
   rtld_timer_start (&start_time);
@@ -1044,40 +1046,10 @@ load_audit_modules (struct link_map *main_map, struct audit_list *audit_list)
     }
 }
 
-/* Check if the executable is not actually dynamically linked, and
-   invoke it directly in that case.  */
-static void
-rtld_chain_load (struct link_map *main_map, char *argv0)
-{
-  /* The dynamic loader run against itself.  */
-  const char *rtld_soname = l_soname (&_dl_rtld_map);
-  if (l_soname (main_map) != NULL
-      && strcmp (rtld_soname, l_soname (main_map)) == 0)
-    _dl_fatal_printf ("%s: loader cannot load itself\n", rtld_soname);
-
-  /* With DT_NEEDED dependencies, the executable is dynamically
-     linked.  */
-  if (__glibc_unlikely (main_map->l_info[DT_NEEDED] != NULL))
-    return;
-
-  /* If the executable has program interpreter, it is dynamically
-     linked.  */
-  for (size_t i = 0; i < main_map->l_phnum; ++i)
-    if (main_map->l_phdr[i].p_type == PT_INTERP)
-      return;
-
-  const char *pathname = _dl_argv[0];
-  if (argv0 != NULL)
-    _dl_argv[0] = argv0;
-  int errcode = __rtld_execve (pathname, _dl_argv, _environ);
-  const char *errname = strerrorname_np (errcode);
-  if (errname != NULL)
-    _dl_fatal_printf("%s: cannot execute %s: %s\n",
-		     rtld_soname, pathname, errname);
-  else
-    _dl_fatal_printf("%s: cannot execute %s: %d\n",
-		     rtld_soname, pathname, errcode);
-}
+/* Stock ld.so, named on a command line and handed a program that turns out not to be dynamically
+   linked, re-execs it directly.  An artifact never has that to deal with: the program comes out of
+   the payload bundle, and a statically linked one would have nothing to bundle it against and
+   nothing for this loader to do.  The function that did it is gone with the command line it served.  */
 
 /* Called to complete the initialization of the link map for the main
    executable.  Returns true if there is a PT_INTERP segment.  */
@@ -1357,6 +1329,52 @@ dl_main (const ElfW(Phdr) *phdr,
 
   __tls_pre_init_tp ();
 
+  /* Find the artifact this loader was mapped out of, before anything else.  It has to be ahead of
+     any name being resolved, since everything an artifact runs comes out of the bundles it carries;
+     and ahead of the environment being walked, since what the artifact says decides whether the
+     variables that walk turns up are left in place.
+
+     AT_EXECFN is the path the kernel was given, which stage zero passes through untouched.  The
+     index cannot be reached through our own program headers the way the musl runtime reaches its
+     own: stage zero rewrote AT_PHDR to describe this loader, and the index is out in the artifact.  */
+  {
+    const char *execfn = NULL;
+#ifdef HAVE_AUX_VECTOR
+    for (ElfW(auxv_t) *av = auxv; av->a_type != AT_NULL; av++)
+      if (av->a_type == AT_EXECFN)
+	{
+	  execfn = (const char *) av->a_un.a_val;
+	  break;
+	}
+#endif
+    _dl_minst_open (execfn);
+  }
+
+  /* Empty what the artifact asked to have emptied.
+     Nothing here is read by this loader whatever the artifact says -- that is what stops the
+     artifact being redirected, and it is not optional.  This is about what is left behind: a
+     variable merely disregarded is still there for the payload's own getenv and is still inherited
+     by every process the payload starts.  Right to clear for an artifact that is the whole of what
+     runs; wrong for one whose job is to start host programs that were meant to see it.
+
+     Done here rather than in the walks that recognize each variable, because those disagree about
+     ordering and coverage: GLIBC_TUNABLES is not an LD_ variable, and the code that reads it runs
+     before this function does, when the artifact has not yet been opened and its answer is not yet
+     known.  */
+  if (_dl_minst_blank_env ())
+    {
+      static const char *const emptied[] =
+	{ "LD_PRELOAD=", "LD_LIBRARY_PATH=", "GLIBC_TUNABLES=" };
+
+      for (char **entry = _environ; *entry != NULL; ++entry)
+	for (size_t i = 0; i < array_length (emptied); ++i)
+	  {
+	    size_t length = strlen (emptied[i]);
+	    if (strncmp (*entry, emptied[i], length) == 0)
+	      (*entry)[length] = '\0';
+	  }
+    }
+
   /* Process the environment variable which control the behaviour.  */
   skip_env = process_envvars (&state);
 
@@ -1391,144 +1409,18 @@ dl_main (const ElfW(Phdr) *phdr,
       /* Note the place where the dynamic linker actually came from.  */
       _dl_rtld_map.l_name = rtld_progname;
 
-      while (_dl_argc > 1)
-	if (! strcmp (_dl_argv[1], "--list"))
-	  {
-	    if (state.mode != rtld_mode_help)
-	      {
-	       state.mode = rtld_mode_list;
-		/* This means do no dependency analysis.  */
-		GLRO(dl_lazy) = -1;
-	      }
+      /* No command line of its own.
+	 Stock ld.so is invoked as "ld.so [OPTION]... PROGRAM ARGS...", taking its own options and
+	 then the program to run.  An artifact has already answered both questions before it starts:
+	 the program is the payload bundle's starting member, marked by a flag rather than named, and
+	 everything on the command line belongs to that program.  So nothing here is consumed and
+	 nothing here is interpreted -- the payload sees exactly what the artifact was invoked with,
+	 including arguments that would otherwise have looked like options and been eaten.
 
-	    --_dl_argc;
-	    ++_dl_argv;
-	  }
-	else if (! strcmp (_dl_argv[1], "--verify"))
-	  {
-	    if (state.mode != rtld_mode_help)
-	      state.mode = rtld_mode_verify;
-
-	    --_dl_argc;
-	    ++_dl_argv;
-	  }
-	else if (! strcmp (_dl_argv[1], "--inhibit-cache"))
-	  {
-	    GLRO(dl_inhibit_cache) = 1;
-	    --_dl_argc;
-	    ++_dl_argv;
-	  }
-	else if (! strcmp (_dl_argv[1], "--library-path")
-		 && _dl_argc > 2)
-	  {
-	    state.library_path = _dl_argv[2];
-	    state.library_path_source = "--library-path";
-
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (! strcmp (_dl_argv[1], "--inhibit-rpath")
-		 && _dl_argc > 2)
-	  {
-	    GLRO(dl_inhibit_rpath) = _dl_argv[2];
-
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (! strcmp (_dl_argv[1], "--audit") && _dl_argc > 2)
-	  {
-	    audit_list_add_string (&state.audit_list, _dl_argv[2]);
-
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (! strcmp (_dl_argv[1], "--preload") && _dl_argc > 2)
-	  {
-	    state.preloadarg = _dl_argv[2];
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (! strcmp (_dl_argv[1], "--argv0") && _dl_argc > 2)
-	  {
-	    argv0 = _dl_argv[2];
-
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (strcmp (_dl_argv[1], "--glibc-hwcaps-prepend") == 0
-		 && _dl_argc > 2)
-	  {
-	    state.glibc_hwcaps_prepend = _dl_argv[2];
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (strcmp (_dl_argv[1], "--glibc-hwcaps-mask") == 0
-		 && _dl_argc > 2)
-	  {
-	    state.glibc_hwcaps_mask = _dl_argv[2];
-	    _dl_argc -= 2;
-	    _dl_argv += 2;
-	  }
-	else if (! strcmp (_dl_argv[1], "--list-tunables"))
-	  {
-	    state.mode = rtld_mode_list_tunables;
-
-	    --_dl_argc;
-	    ++_dl_argv;
-	  }
-	else if (! strcmp (_dl_argv[1], "--list-diagnostics"))
-	  {
-	    state.mode = rtld_mode_list_diagnostics;
-
-	    --_dl_argc;
-	    ++_dl_argv;
-	  }
-	else if (strcmp (_dl_argv[1], "--help") == 0)
-	  {
-	    state.mode = rtld_mode_help;
-	    --_dl_argc;
-	    ++_dl_argv;
-	  }
-	else if (strcmp (_dl_argv[1], "--version") == 0)
-	  _dl_version ();
-	else if (_dl_argv[1][0] == '-' && _dl_argv[1][1] == '-')
-	  {
-	    if (_dl_argv[1][2] == '\0')
-	      {
-		/* End of option list.  */
-		--_dl_argc;
-		++_dl_argv;
-		break;
-	      }
-	    else
-	      /* Unrecognized option.  */
-	      _dl_usage (ld_so_name, _dl_argv[1]);
-	  }
-	else
-	  break;
-
-      if (__glibc_unlikely (state.mode == rtld_mode_list_tunables))
-	{
-	  __tunables_print ();
-	  _exit (0);
-	}
-
-      if (state.mode == rtld_mode_list_diagnostics)
-	_dl_print_diagnostics (_environ);
-
-      /* If we have no further argument the program was called incorrectly.
-	 Grant the user some education.  */
-      if (_dl_argc < 2)
-	{
-	  if (state.mode == rtld_mode_help)
-	    /* --help without an executable is not an error.  */
-	    _dl_help (ld_so_name, &state);
-	  else
-	    _dl_usage (ld_so_name, NULL);
-	}
-
-      --_dl_argc;
-      ++_dl_argv;
+	 The options are gone rather than refused.  Every one of them reached outside the artifact:
+	 --library-path and --preload to load something that was never bundled, --inhibit-cache and
+	 --inhibit-rpath to change a search that no longer happens, --audit to interpose, --argv0 to
+	 lie about identity.  A sealed runtime that accepted them would not be sealed.  */
 
       /* The initialization of dl_stack_prot_flags done below assumes the
 	 executable's PT_GNU_STACK may have been honored by the kernel, and
@@ -1581,16 +1473,25 @@ dl_main (const ElfW(Phdr) *phdr,
 #ifdef HAVE_THP
 	  _dl_get_thp_config ();
 #endif
-	  _dl_map_object (NULL, rtld_progname, lt_executable, 0,
-			  __RTLD_OPENEXEC, LM_ID_BASE);
+	  struct minst_member main_member;
+	  if (!_dl_minst_main (&main_member))
+	    _dl_fatal_printf ("\
+%s: no program in this artifact, so there is nothing to run\n", _dl_argv[0]);
+
+	  _dl_map_object_from_bundle (main_member.offset, lt_executable,
+				      __RTLD_OPENEXEC, LM_ID_BASE);
 	  rtld_timer_stop (&load_time, start);
 	}
 
       /* Now the map for the main executable is available.  */
       main_map = GL(dl_ns)[LM_ID_BASE]._ns_loaded;
 
-      if (__glibc_likely (state.mode == rtld_mode_normal))
-	rtld_chain_load (main_map, argv0);
+      /* Not chained to another loader.  Stock ld.so, asked to run a program that names a different
+	 interpreter, re-execs it through that one -- which is right when the program was named on a
+	 command line and is a path on the machine.  Here it is neither: the program came out of the
+	 artifact, argv[0] is the artifact itself, and re-execing it would start the same artifact
+	 again and again.  The interpreter the payload names is also simply wrong for it, since the
+	 one it is going to get is this one.  */
 
       phdr = main_map->l_phdr;
       phnum = main_map->l_phnum;
@@ -2546,12 +2447,9 @@ process_envvars_secure (struct dl_main_state *state)
 	  break;
 
 	case 7:
-	  /* For __libc_enable_secure mode, preload pathnames containing slashes
-	     are ignored.  Also, shared objects are only preloaded from the
-	     standard search directories and only if they have set-user-ID mode
-	     bit enabled.  */
-	  if (memcmp (envline, "PRELOAD", 7) == 0)
-	    state->preloadlist = &envline[8];
+	  /* Blanked here as well.  This is the path taken for a set-user-ID program, where stock
+	     glibc reads LD_PRELOAD under tighter rules rather than not at all; an artifact reads it
+	     under no rules, and leaves nothing of it for the payload or its children.  */
 	  break;
 	}
     }
@@ -2636,15 +2534,13 @@ process_envvars_default (struct dl_main_state *state)
 	      break;
 	    }
 
-	  /* For __libc_enable_secure mode, preload pathnames containing slashes
-	     are ignored.  Also, shared objects are only preloaded from the
-	     standard search directories and only if they have set-user-ID mode
-	     bit enabled.  */
-	  if (memcmp (envline, "PRELOAD", 7) == 0)
-	    {
-	      state->preloadlist = &envline[8];
-	      break;
-	    }
+	  /* LD_PRELOAD is not read, and does not survive either.  What an artifact loads is what was
+	     bundled into it, and a variable that inserts an object ahead of everything else is the
+	     most direct way there is of making a program run code its author never shipped.
+
+	     Whether it is also emptied for the payload is a separate question, answered in one place
+	     by minst_blank_env above rather than here: GLIBC_TUNABLES has to be emptied too and is not
+	     an LD_ variable, so this walk would never reach it.  */
 
 	  /* Which shared object shall be profiled.  */
 	  if (memcmp (envline, "PROFILE", 7) == 0 && envline[8] != '\0')
@@ -2676,13 +2572,10 @@ process_envvars_default (struct dl_main_state *state)
 	  break;
 
 	case 12:
-	  /* The library search path.  */
-	  if (memcmp (envline, "LIBRARY_PATH", 12) == 0)
-	    {
-	      state->library_path = &envline[13];
-	      state->library_path_source = "LD_LIBRARY_PATH";
-	      break;
-	    }
+	  /* LD_LIBRARY_PATH is not read, and does not survive either.  Where an object comes from is
+	     the artifact's decision: out of the bundle, or -- when the artifact says it may -- from
+	     wherever the host keeps the thing being delegated to it.  Neither is a question for the
+	     environment to answer.  Emptying it for the payload is minst_blank_env's job.  */
 
 	  /* Where to place the profiling data file.  */
 	  if (memcmp (envline, "DEBUG_OUTPUT", 12) == 0)

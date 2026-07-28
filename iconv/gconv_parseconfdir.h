@@ -21,6 +21,12 @@
 #include <locale.h>
 #include <sys/types.h>
 
+/* For GLRO (dl_minst_open_member).  Guarded for the same reason its use below is: only a shared
+   build has a loader to ask.  */
+#ifdef SHARED
+# include <ldsodefs.h>
+#endif
+
 #if IS_IN (libc)
 # include <libio/libioP.h>
 # define __getdelim(line, len, c, fp) __getdelim (line, len, c, fp)
@@ -51,9 +57,33 @@ static void add_module (char *, const char *, size_t, int);
 static bool
 read_conf_file (const char *filename, const char *directory, size_t dir_len)
 {
+  /* The artifact first, if this is running inside one.  FILENAME was built by joining a directory
+     compiled in when this runtime was configured to a name -- and that directory describes a machine
+     the artifact is not running on, so the file it names is the host's or nothing.  What the artifact
+     carries is looked for by the tail of that path, the same way a gconv module is.
+
+     Falls through to the ordinary open when there is no artifact, or when there is one and it does
+     not carry this file: an artifact that is not sealed is entitled to the host's configuration.  */
+  FILE *fp = NULL;
+
+#ifdef SHARED
+  if (GLRO (dl_minst_open_member) != NULL)
+    {
+      int fd = GLRO (dl_minst_open_member) (filename);
+      if (fd >= 0)
+	{
+	  fp = fdopen (fd, "rc");
+	  if (fp == NULL)
+	    __close (fd);
+	}
+    }
+#endif
+
   /* Note the file is opened with cancellation in the I/O functions
      disabled.  */
-  FILE *fp = fopen (filename, "rce");
+  if (fp == NULL)
+    fp = fopen (filename, "rce");
+
   char *line = NULL;
   size_t line_len = 0;
   static int modcounter;
@@ -120,9 +150,8 @@ static __always_inline bool
 gconv_parseconfdir (const char *prefix, const char *dir, size_t dir_len)
 {
   /* No slash needs to be inserted between dir and gconv_conf_filename; dir
-     already ends in a slash.  The additional 2 is to accommodate the ".d"
-     when looking for configuration files in gconv-modules.d.  */
-  size_t buflen = dir_len + sizeof (gconv_conf_filename) + 2;
+     already ends in a slash.  */
+  size_t buflen = dir_len + sizeof (gconv_conf_filename);
   char *buf = malloc (buflen + (prefix != NULL ? strlen (prefix) : 0));
   char *cp = buf;
   bool found = false;
@@ -133,49 +162,21 @@ gconv_parseconfdir (const char *prefix, const char *dir, size_t dir_len)
   if (prefix != NULL)
     cp = stpcpy (cp, prefix);
 
-  cp = mempcpy (mempcpy (cp, dir, dir_len), gconv_conf_filename,
-		sizeof (gconv_conf_filename));
+  mempcpy (mempcpy (cp, dir, dir_len), gconv_conf_filename,
+	   sizeof (gconv_conf_filename));
 
-  /* Read the gconv-modules configuration file first.  */
+  /* One configuration file, not a file and a directory of more.
+
+     Stock glibc also lists gconv-modules.d and reads every .conf in it.  That is a directory listing
+     on a path built from a prefix compiled in when this runtime was configured -- a directory on
+     somebody else's machine as far as an artifact is concerned, and a way for what an artifact
+     converts to depend on what is installed where it happens to run.
+
+     Nothing is lost by dropping it.  The bundler joins those files onto this one when it assembles
+     the runtime bundle, so what arrives here is everything that was in both, and it does that for a
+     member set supplied through --replace-glibc as readily as for the built-in one.  */
   found = read_conf_file (buf, dir, dir_len);
 
-  /* Next, see if there is a gconv-modules.d directory containing
-     configuration files and if it is non-empty.  */
-  cp--;
-  cp[0] = '.';
-  cp[1] = 'd';
-  cp[2] = '\0';
-
-  DIR *confdir = opendir (buf);
-  if (confdir != NULL)
-    {
-      struct dirent64 *ent;
-      while ((ent = readdir64 (confdir)) != NULL)
-	{
-	  if (ent->d_type != DT_REG && ent->d_type != DT_UNKNOWN
-	      && ent->d_type != DT_LNK)
-	    continue;
-
-	  size_t len = strlen (ent->d_name);
-	  const char *suffix = ".conf";
-
-	  if (len > strlen (suffix)
-	      && strcmp (ent->d_name + len - strlen (suffix), suffix) == 0)
-	    {
-	      char *conf;
-	      struct_stat64 st;
-	      if (asprintf (&conf, "%s/%s", buf, ent->d_name) < 0)
-		continue;
-
-	      if (ent->d_type != DT_UNKNOWN
-		  || (stat64_impl (conf, &st) != -1 && S_ISREG (st.st_mode)))
-		found |= read_conf_file (conf, dir, dir_len);
-
-	      free (conf);
-	    }
-	}
-      closedir (confdir);
-    }
   free (buf);
   return found;
 }

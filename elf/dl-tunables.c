@@ -30,6 +30,7 @@
 #include <sysdep.h>
 #include <fcntl.h>
 #include <ldsodefs.h>
+#include <dl-minst.h>
 #include <array_length.h>
 #include <dl-minimal-malloc.h>
 #include <dl-symbol-redir-ifunc.h>
@@ -467,9 +468,20 @@ __tunables_init (char **envp, char **argv)
     }
 #endif /* defined(SHARED) && defined (USE_LDCONFIG) */
 
-  /* Ignore tunables for AT_SECURE programs.  */
-  if (__libc_enable_secure)
-    return;
+  /* Nothing from the environment.
+     Tunables keep the values this runtime was built with.  They are not a way to load anything,
+     which is why they are easy to overlook, but glibc.cpu.hwcaps decides which IFUNC variant of
+     memcpy and its neighbors the process runs, and glibc.rtld.* changes how the loader behaves.  An
+     artifact whose behavior depends on a variable somebody set outside it is not sealed, whatever
+     it carries.
+
+     The compiled-in defaults are still applied above, so this is a refusal to be reconfigured rather
+     than a refusal to be tuned: anyone wanting different values builds a runtime that has them.
+
+     Emptying GLIBC_TUNABLES for the payload is a separate question, answered elsewhere: this runs
+     before dl_main, so the artifact has not been opened yet and what it asks for is not yet known.
+     dl_main empties it there, along with the LD_ variables, once it can.  */
+  return;
 
   enum { tunable_num_env_alias = array_length (tunable_env_alias_list) };
   struct tunable_toset_t tunables_env_alias[tunable_num_env_alias] = {};
