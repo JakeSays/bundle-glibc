@@ -1979,6 +1979,109 @@ open_path (const char *name, size_t namelen, int mode,
    LM_ID_BASE stands for "not yet made", which is safe because the base namespace is never this.  */
 static Lmid_t minst_host_ns = LM_ID_BASE;
 
+/* The host namespace's global scope.
+
+   A namespace normally has one root -- the program for the base namespace, the object asked for by
+   dlmopen -- whose dependency closure covers everything in it, so every object can share that one
+   list and _dl_new_object hands it out.  This namespace has no such object: things arrive in it one
+   at a time as the payload's dependencies are walked and as drivers open more, and whichever came
+   first is root only by accident of ordering.  Sharing its closure is how libGL came to be searching
+   libQt6Core's.
+
+   So the namespace is given a root of its own, holding every object placed there.  Host code then
+   resolves against host code, which is the point of the arrangement: the graphics stack is held
+   together by dlopen and dispatch tables rather than by DT_NEEDED, so an object's own closure does
+   not contain the things it will actually need.
+
+   The address is stable and only the contents change, so every object that has already captured it
+   sees each update without being revisited.  */
+static struct r_scope_elem minst_host_scope;
+
+void
+_dl_minst_host_scope_update (void)
+{
+  if (minst_host_ns == LM_ID_BASE)
+    return;
+
+  /* A proxy is what host code gets back from dlopen, and dlsym on that handle looks the symbol up
+     in the searchlist of the object behind it.  An object that arrived as somebody's dependency has
+     none -- only the map handed to _dl_map_object_deps gets one -- so the bundled libc, libpthread
+     and the rest have none.  Those are the objects drivers open by name: they ask libc for malloc,
+     free and realloc so their allocations go through the same libc as everything else.
+
+     Here rather than at proxy creation, because proxies are made during the payload's dependency
+     walk and _dl_map_object_deps clears l_reserved across every map it touches, which is that
+     walk's only defence against listing an object twice.  Every caller of this function is past
+     that point: startup calls it once the closure is complete, and dlopen once its own walk has
+     returned.  The loop settles rather than iterating once, since a closure can bring in a member
+     that is itself proxied.  */
+  bool more = true;
+  while (more)
+    {
+      more = false;
+
+      for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+	if (l->l_proxy && l->l_real->l_searchlist.r_list == NULL)
+	  {
+	    if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+	      _dl_debug_printf ("minst: closing over %s [%lu], which host code can open by name\n",
+				l->l_real->l_name, l->l_real->l_ns);
+
+	    _dl_map_object_deps (l->l_real, NULL, 0, 0, 0);
+	    more = true;
+	    break;
+	  }
+    }
+
+  unsigned int count = 0;
+  for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+    ++count;
+
+  struct link_map **list = malloc (count * sizeof *list);
+  if (list == NULL)
+    return;
+
+  unsigned int i = 0;
+  for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+    list[i++] = l;
+
+  /* The old array is not freed.  Something may be reading it -- a lazy binding on another thread
+     resolves against this list without taking a lock -- and the array is one pointer per object in
+     one namespace, so the leak is bounded by how much host code is loaded and is paid once per
+     arrival.  glibc does the same for the base namespace's global scope, for the same reason.  */
+  minst_host_scope.r_list = list;
+  atomic_store_release (&minst_host_scope.r_nlist, count);
+
+  /* Published only now that it holds something.  A scope is walked with a do/while that reads the
+     first entry before testing the count, so an empty one is a null dereference rather than a search
+     that finds nothing.  Until the first object arrives there is nothing for the namespace to share
+     and _dl_new_object's usual answer is the right one.  */
+  GL(dl_ns)[minst_host_ns]._ns_main_searchlist = &minst_host_scope;
+
+  /* Objects that arrived before there was a shared scope took the namespace's first object as their
+     root, which is the accident this exists to correct.  Point them at the shared one; later
+     arrivals get it from _dl_new_object without help.  */
+  for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+    if (!l->l_proxy && l->l_scope[0] != &minst_host_scope)
+      {
+	l->l_scope[0] = &minst_host_scope;
+	l->l_scope[1] = NULL;
+      }
+}
+
+bool
+_dl_minst_is_host_scope (struct r_scope_elem *scope)
+{
+  return scope == &minst_host_scope;
+}
+
+Lmid_t
+_dl_minst_host_namespace_id (void)
+{
+  return minst_host_ns;
+}
+rtld_hidden_def (_dl_minst_host_namespace_id)
+
 Lmid_t
 _dl_minst_host_namespace (void)
 {
@@ -2046,9 +2149,123 @@ _dl_minst_finish_host_namespace (void)
      so an object arriving here without one faults on the first versioned symbol it has to resolve
      rather than reporting anything.  Through l_real, because a proxy has no versions of its own and
      the object it stands for already has them.  */
+  /* Bundle members that only host code turned out to want are in the base namespace but not in the
+     payload's closure, because they were loaded after it was worked out.  A new object is given the
+     namespace's global scope, which here is the payload's searchlist -- a snapshot from before the
+     object existed, and one that therefore does not contain it.  Such an object cannot resolve even
+     the symbols it defines itself.  libm failing to find its own _LIB_VERSION is how this was found.
+
+     Objects that are in the payload's closure are left alone: sharing its scope is right for them,
+     and it is what they have always done.  */
+  struct link_map *payload = GL(dl_ns)[LM_ID_BASE]._ns_loaded;
+  for (struct link_map *l = payload; l != NULL; l = l->l_next)
+    {
+      if (l == payload || l->l_proxy || l->l_searchlist.r_list != NULL)
+	continue;
+
+      bool in_payload_closure = false;
+      for (unsigned int i = 0; i < payload->l_searchlist.r_nlist; ++i)
+	if (payload->l_searchlist.r_list[i] == l)
+	  {
+	    in_payload_closure = true;
+	    break;
+	  }
+
+      if (in_payload_closure)
+	continue;
+
+      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+	_dl_debug_printf ("minst: closing over %s [%lu], wanted only by host code\n",
+			  l->l_name, l->l_ns);
+
+      _dl_map_object_deps (l, NULL, 0, 0, 0);
+    }
+
   for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
     if (l->l_real->l_versions == NULL)
       _dl_check_map_versions (l->l_real, 0, 0);
+
+  /* Everything that was going to arrive has arrived, so the shared scope can be filled in.  */
+  _dl_minst_host_scope_update ();
+}
+
+/* Registers the thread-local storage of everything in the host namespace.
+
+   The startup pass walks the payload's closure, where every host library is a proxy -- and a proxy
+   has no thread-local storage of its own, so it is skipped and the object behind it is never
+   registered.  A library whose thread-locals were never given a slot reads them from nothing, which
+   is a null dereference at whatever offset the variable sits.
+
+   Through l_real for the same reason, and only for objects that have any.  */
+void
+_dl_minst_host_tls (void)
+{
+  if (minst_host_ns == LM_ID_BASE)
+    return;
+
+  for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+    {
+      /* Proxies stand for objects in the base namespace, which the startup pass has already
+	 registered.  Following one would register the same storage twice.  */
+      if (l->l_proxy || l->l_tls_blocksize == 0)
+	continue;
+
+      if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+	_dl_debug_printf ("minst: thread-local storage for %s [%lu]\n", l->l_name, l->l_ns);
+
+      _dl_add_to_slotinfo (l, true);
+
+      /* And a place in the static block for anything that needs one.  The offsets for the startup
+	 set are worked out in init_tls, long before any of this exists, so an object arriving here
+	 has none -- which is invisible to a module using dynamic thread-local storage, since
+	 __tls_get_addr allocates on demand, and fatal to one using initial-exec, which reads a fixed
+	 offset from the thread pointer and gets whatever was never assigned.
+
+	 GLVND's dispatch is the case in point: libGLdispatch resolves _glapi_tls_Current through a
+	 single TPOFF64 relocation, and it is the only object in a plain GL program that does.  The
+	 surplus this draws from is reserved at startup for exactly this, and is what lets a dlopened
+	 object use initial-exec at all.  */
+      if (l->l_tls_offset == NO_TLS_OFFSET)
+	_dl_allocate_static_tls (l);
+    }
+}
+
+/* Relocates everything the pass above brought in.
+
+   The startup loop cannot: it walks the payload's own dependency order, which reaches a host object
+   only through the proxy standing for it and never reaches the rest at all.  Two kinds are missed --
+   host objects that nothing in the payload's closure names, and bundle members that only host code
+   turned out to want.  libm is the second kind: nothing in the payload needed it, a host library did,
+   and an unrelocated libm is an IFUNC that cannot be resolved.
+
+   Separate from the closure pass because of when it has to run.  Closures are needed before
+   relocation; relocation itself must wait until the TLS slotinfo is populated, or an IFUNC resolver
+   fired during it reads thread-local storage that is not there yet.
+
+   Each object's own searchlist gives the order, walked backwards so dependencies are relocated before
+   what depends on them, and through l_real because a proxy has nothing to relocate.
+   _dl_relocate_object returns immediately for anything already done, so the overlap between one
+   object's closure and another's costs nothing.  */
+void
+_dl_minst_relocate_host_namespace (void)
+{
+  if (minst_host_ns == LM_ID_BASE)
+    return;
+
+  for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
+    {
+      if (l->l_proxy)
+	continue;
+
+      for (unsigned int i = l->l_searchlist.r_nlist; i-- > 0; )
+	{
+	  struct link_map *dependency = l->l_searchlist.r_list[i]->l_real;
+
+	  if (!dependency->l_relocated)
+	    _dl_relocate_object (dependency, dependency->l_scope,
+				 GLRO(dl_lazy) ? RTLD_LAZY : 0, 0);
+	}
+    }
 }
 
 /* Whether NAME should be resolved off the machine and therefore belongs in the host namespace.
@@ -2122,13 +2339,19 @@ _dl_lookup_map (Lmid_t nsid, const char *name)
 	continue;
       if (!_dl_name_match_p (name, l))
 	{
-	  if (__glibc_likely (l->l_soname_added) || l_soname (l) == NULL
+	  /* A proxy borrows its name list from the object it stands for, so a name cached here has
+	     to be recorded against that object -- adding it to the proxy would extend a list the
+	     proxy does not own while leaving the owner's l_soname_added clear, and the work would
+	     be repeated on every later query through the real map.  */
+	  struct link_map *named = l->l_real;
+
+	  if (__glibc_likely (named->l_soname_added) || l_soname (l) == NULL
 	      || strcmp (name, l_soname (l)) != 0)
 	    continue;
 
 	  /* We have a match on a new name -- cache it.  */
-	  add_name_to_object (l, l_soname (l));
-	  l->l_soname_added = 1;
+	  add_name_to_object (named, l_soname (l));
+	  named->l_soname_added = 1;
 	}
 
       /* We have a match.  */

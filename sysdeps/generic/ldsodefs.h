@@ -94,6 +94,12 @@ dl_relocate_ld (const struct link_map *l)
 static inline const char *
 l_soname (const struct link_map *l)
 {
+  /* A proxy has no dynamic section of its own; its soname is the soname of the object it stands
+     for.  Following the redirect here rather than at each caller keeps every reader of the name
+     correct, including the namespace walk in _dl_lookup_map, which is the one place a proxy is
+     routinely the map in hand.  For anything that is not a proxy l_real points at itself.  */
+  l = l->l_real;
+
   if (l->l_info[DT_SONAME] == NULL)
     return NULL;
   else

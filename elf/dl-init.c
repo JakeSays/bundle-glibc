@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <ldsodefs.h>
 #include <elf-initfini.h>
+#include <dl-minst.h>
 
 
 static void
@@ -116,9 +117,53 @@ _dl_init (struct link_map *main_map, int argc, char **argv, char **env)
      loader which has to find the dependencies at runtime instead of
      letting the user do it right.  Stupidity rules!  */
 
+  /* The host namespace first.  Its objects are the payload's dependencies as far as the payload is
+     concerned, and a dependency's constructors run before its dependent's -- but the walk below
+     cannot reach them.  What it has for a host library is the proxy, and a proxy has no constructors
+     to run; the object with the constructors is next door, in a list this one never visits.
+
+     Each object's own searchlist gives the order, walked backwards so that what a thing depends on is
+     constructed before the thing itself.  call_init has already refused proxies and anything already
+     constructed, so the overlap between one closure and another costs nothing.  */
+  /* Everything the payload depends on, deepest first, but not the payload itself: it is first in the
+     search list and so last here, and the host namespace has to be constructed before it.  */
   i = main_map->l_searchlist.r_nlist;
-  while (i-- > 0)
+  while (i-- > 1)
     call_init (main_map->l_initfini[i], argc, argv, env);
+
+#ifdef SHARED
+  /* Then the host namespace, between the two.
+
+     After the bundled libraries, because host code calls into them -- a constructor in libGL reaching
+     strdup wants a libc that has finished starting.  Before the payload, because as far as it is
+     concerned these are its dependencies, and a dependency is constructed first.
+
+     The walk above cannot reach them: what it has for a host library is the proxy, which has no
+     constructors, while the object that has them is next door in a list this one never visits.  Each
+     object's own search list gives the order, backwards so that what a thing depends on goes first.
+     call_init refuses proxies and anything already done, so overlapping closures cost nothing.  */
+  Lmid_t host = _dl_minst_host_namespace_id ();
+  if (__glibc_unlikely (host != LM_ID_BASE))
+    for (struct link_map *l = GL(dl_ns)[host]._ns_loaded; l != NULL; l = l->l_next)
+      {
+	if (l->l_proxy)
+	  continue;
+
+	/* l_initfini, not l_searchlist.  The search list is the breadth-first walk of the
+	   dependencies and is what symbol lookup wants; reversing it is not dependency order and
+	   puts a library before something it depends on.  l_initfini is the topological sort glibc
+	   builds for exactly this, and is what the loop below uses for the payload.
+
+	   libGLX ran before libGLdispatch, which it needs, and called into it before its
+	   constructor had set anything up.  */
+	for (unsigned int j = l->l_searchlist.r_nlist; j-- > 0; )
+	  call_init (l->l_initfini[j]->l_real, argc, argv, env);
+      }
+#endif
+
+  /* And the payload last of all.  */
+  if (main_map->l_searchlist.r_nlist > 0)
+    call_init (main_map->l_initfini[0], argc, argv, env);
 
 #ifndef HAVE_INLINED_SYSCALLS
   /* Finished starting up.  */

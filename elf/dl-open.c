@@ -463,7 +463,17 @@ _dl_open_relocate_one_object (struct dl_open_args *args, struct r_debug *r,
 			      struct link_map *l, int reloc_mode,
 			      bool *relocation_in_progress)
 {
-  if (l->l_real->l_relocated)
+  /* Through the proxy to the object it stands for.  The test below is already written against
+     l_real, because stock glibc has one case of l_real differing -- the copy of ld.so a secondary
+     namespace gets -- and that one is always relocated already, so which of the two is then passed
+     to _dl_relocate_object never mattered.
+
+     It matters here.  A proxy can stand for an object that has not been relocated yet, and
+     relocating the proxy instead walks an l_info that is entirely NULL: D_PTR on l_info[DT_SYMTAB]
+     dereferences nothing at offset 8.  What needs relocating is always the real object.  */
+  l = l->l_real;
+
+  if (l->l_relocated)
     return;
 
   if (!*relocation_in_progress)
@@ -517,6 +527,12 @@ is_already_fully_open (struct link_map *map, int mode)
 	  /* dlopen completed initialization of this map.  Maps with
 	     l_type == lt_library start out as partially initialized.  */
 	  && map->l_searchlist.r_list != NULL
+	  /* A proxy has a searchlist of its own from the moment it is made, so on its own account
+	     it is fully open.  But the handle it becomes is used to look symbols up in the object it
+	     stands for, and that object may have arrived as somebody's dependency, which leaves it
+	     without a searchlist -- only the map handed to _dl_map_object_deps gets one.  Take the
+	     slow path so dl_open_worker can fill it in.  */
+	  && (!map->l_proxy || map->l_real->l_searchlist.r_list != NULL)
 	  /* The object is already in the global scope if requested.  */
 	  && (!(mode & RTLD_GLOBAL) || map->l_global)
 	  /* The object is already NODELETE if requested.  */
@@ -665,6 +681,25 @@ dl_open_worker_begin (void *a)
   /* It was already open.  See is_already_fully_open above.  */
   if (__glibc_unlikely (new->l_searchlist.r_list != NULL))
     {
+      /* A proxy is a valid answer here -- opening a name already proxied into this namespace finds
+	 it and stops.  The proxy has a searchlist of its own, which is what let the branch be taken,
+	 but dlsym on the handle follows l_real and searches the searchlist of the object behind it,
+	 and that object may never have had one: only the map handed to _dl_map_object_deps is given
+	 one, so anything that arrived as somebody's dependency has none.  Upstream never sees this
+	 because opening an already-loaded dependency directly runs the dependency walk over it,
+	 which is what fills the searchlist in; reaching the same object through a proxy skips that.
+
+	 Build it now.  This is a real dlopen, so no dependency walk is in progress -- doing it at
+	 proxy creation would nest inside the startup walk, and _dl_map_object_deps clears l_reserved
+	 across the maps it touches, which is the outer walk's only defence against duplicates.
+
+	 The bundled libc is the case that matters: drivers open it by name and dlsym the allocator
+	 they are expected to route through.  */
+      if (__glibc_unlikely (new->l_proxy) && new->l_real->l_searchlist.r_list == NULL)
+	_dl_map_object_deps (new->l_real, NULL, 0, 0,
+			     args->dl_mode & (__RTLD_DLOPEN | RTLD_DEEPBIND
+					      | __RTLD_AUDIT | RTLD_ISOLATE));
+
       /* Let the user know about the opencount.  */
       if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
 	_dl_debug_printf ("opening file=%s [%lu]; direct_opencount=%u\n\n",
@@ -747,6 +782,16 @@ dl_open_worker_begin (void *a)
 	  __rtld_static_init (map);
 #endif
       }
+
+#ifdef SHARED
+  /* Anything that landed in the host namespace joins its shared scope, before relocation rather than
+     after: what is about to be relocated resolves against that scope, and a driver chosen at run
+     time arrives exactly this way.  GLVND asks the display which vendor drives it and opens that
+     library, so nothing named it until now, and it has to be visible to the host code that will call
+     into it rather than only to itself.  */
+  if (__glibc_unlikely (args->nsid == _dl_minst_host_namespace_id ()))
+    _dl_minst_host_scope_update ();
+#endif
 
   _dl_open_check (new, mode);
 

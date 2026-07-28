@@ -783,28 +783,35 @@ cannot allocate TLS data structures for initial thread\n");
 }
 
 static unsigned int
-do_preload (const char *fname, struct link_map *main_map, const char *where)
+do_preload (const char *fname, struct link_map *main_map, const char *where, bool from_host)
 {
   const char *objname;
   const char *err_str = NULL;
   struct map_args args;
   bool malloced;
 
-  /* Anything the artifact carries is left alone.  Not because of which file would be opened -- the
-     bundle answers first, so it would be ours either way -- but because of where it would land.  A
-     preloaded object is inserted ahead of the main program's dependencies and interposes on
-     everything after it, so honoring such an entry would let a file on the host promote one of the
-     artifact's own libraries to interposition position and rearrange a scope its author never
-     offered to have rearranged.  It would also serve nobody: what the administrator wanted was the
-     host's build of that library and the hooks in it, which ours does not have.
+  /* A host preload naming something the artifact carries is left alone.  Not because of which file
+     would be opened -- the bundle answers first, so it would be ours either way -- but because of
+     where it would land.  A preloaded object is inserted ahead of the main program's dependencies
+     and interposes on everything after it, so honoring such an entry would let a file on the host
+     promote one of the artifact's own libraries to interposition position and rearrange a scope its
+     author never offered to have rearranged.  It would also serve nobody: what the administrator
+     wanted was the host's build of that library and the hooks in it, which ours does not have.
 
-     Entries here are usually absolute paths and a member is matched by its final component, so this
+     Entries there are usually absolute paths and a member is matched by its final component, so this
      catches a host path whenever its basename names something carried.
 
+     Only for preloads that came from the machine.  The runtime bundle preloads itself through here,
+     and every one of its members is carried by definition -- refusing those would refuse the whole
+     of the thing this is meant to bring up.
+
      Silently, since nothing failed and there is nothing for anyone to do about it.  */
-  struct minst_member carried;
-  if (_dl_minst_find (fname, &carried))
-    return 0;
+  if (from_host)
+    {
+      struct minst_member carried;
+      if (_dl_minst_find (fname, &carried))
+	return 0;
+    }
 
   args.str = fname;
   args.loader = main_map;
@@ -885,7 +892,7 @@ handle_preload_list (const char *preloadlist, struct link_map *main_map,
 	++p;
 
       if (dso_name_valid_for_suid (fname))
-	npreloads += do_preload (fname, main_map, where);
+	npreloads += do_preload (fname, main_map, where, true);
     }
   return npreloads;
 }
@@ -1375,7 +1382,8 @@ dl_main (const ElfW(Phdr) *phdr,
      covers the whole of startup rather than beginning partway through it.  */
   if (_dl_minst_trace ())
     GLRO(dl_debug_mask) = (DL_DEBUG_FILES | DL_DEBUG_LIBS | DL_DEBUG_RELOC
-			   | DL_DEBUG_BINDINGS | DL_DEBUG_SCOPES);
+			   | DL_DEBUG_BINDINGS | DL_DEBUG_SCOPES
+			   | DL_DEBUG_IMPCALLS);
 
   /* Empty what the artifact asked to have emptied.
      Nothing here is read by this loader whatever the artifact says -- that is what stops the
@@ -1738,6 +1746,36 @@ dl_main (const ElfW(Phdr) *phdr,
   struct link_map **preloads = NULL;
   unsigned int npreloads = 0;
 
+  /* The whole of the bundled runtime, before the payload's own dependencies are looked at.
+
+     An artifact carries a complete libc and it should come up as one, the way a libc comes up before
+     any user code anywhere else.  Left to arrive as dependencies, its libraries appear only when
+     something happens to ask: libm turns up because a host library wanted it, after the payload's
+     closure has been settled, and is then a member with no place in the relocation order and a scope
+     that was decided before it existed.  Those are one fault wearing several hats.
+
+     Which members these are is said by the index rather than worked out here -- the bundler put them
+     there and knows which are libraries and which are the plugins glibc opens for itself.
+
+     Preloading is the existing answer to "in the closure, ahead of the payload's own dependencies",
+     so this uses that rather than inventing anything: the dependency walk, the relocation order and
+     the constructor order all follow without needing to know where these came from.  */
+  {
+    RTLD_TIMING_VAR (start);
+    rtld_timer_start (&start);
+
+    const char *member;
+    for (uint32_t index = 0; _dl_minst_runtime_library (index, &member); ++index)
+      {
+	if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+	  _dl_debug_printf ("minst: bringing up %s\n", member);
+
+	npreloads += do_preload (member, main_map, "the runtime bundle", false);
+      }
+
+    rtld_timer_accum (&load_time, start);
+  }
+
   if (__glibc_unlikely (state.preloadlist != NULL))
     {
       RTLD_TIMING_VAR (start);
@@ -1832,14 +1870,14 @@ dl_main (const ElfW(Phdr) *phdr,
 	      runp = file;
 	      while ((p = strsep (&runp, ": \t\n")) != NULL)
 		if (p[0] != '\0')
-		  npreloads += do_preload (p, main_map, preload_file);
+		  npreloads += do_preload (p, main_map, preload_file, true);
 	    }
 
 	  if (problem != NULL)
 	    {
 	      char *p = strndupa (problem, file_size - (problem - file));
 
-	      npreloads += do_preload (p, main_map, preload_file);
+	      npreloads += do_preload (p, main_map, preload_file, true);
 	    }
 
 	  rtld_timer_accum (&load_time, start);
@@ -1921,6 +1959,20 @@ dl_main (const ElfW(Phdr) *phdr,
        In this case it doesn't matter much where we put the
        interpreter object, so we just initialize the list pointer so
        that the assertion below holds.  */
+    _dl_rtld_map.l_next = _dl_rtld_map.l_prev->l_next;
+
+  /* Where this lands is taken from the search list, which assumes the namespace chain runs in the
+     same order.  Proxies break that assumption: one standing for a host object is appended to the
+     end of the base namespace's chain when it is made, while in the search list it sits wherever the
+     dependency walk reached it.  The two orders then disagree, and the neighbours derived above are
+     not the neighbours in the chain.
+
+     Take the chain's answer when they differ.  What this positioning decides is where the loader
+     appears to something walking the list, and next to a proxy is as good a place as any; the
+     alternative is refusing to start over the order of a debugger's listing.  The sysinfo adjustment
+     above is the same concession for the vDSO, which is likewise somewhere the search list does not
+     expect.  */
+  if (_dl_rtld_map.l_prev->l_next != _dl_rtld_map.l_next)
     _dl_rtld_map.l_next = _dl_rtld_map.l_prev->l_next;
 
   assert (_dl_rtld_map.l_prev->l_next == _dl_rtld_map.l_next);
@@ -2210,6 +2262,10 @@ dl_main (const ElfW(Phdr) *phdr,
 	  if (l->l_tls_blocksize != 0)
 	    _dl_add_to_slotinfo (l, true);
 	}
+
+      /* And the host namespace, which the walk above cannot see: every host library appears there as
+	 a proxy, and a proxy has no thread-local storage of its own to notice.  */
+      _dl_minst_host_tls ();
       /* _dl_add_to_slotinfo records gen = dl_tls_generation + 1, and
 	 _dl_allocate_tls_init asserts gen <= dl_tls_generation, so bump
 	 the generation before init.  */
@@ -2217,6 +2273,17 @@ dl_main (const ElfW(Phdr) *phdr,
 	++GL(dl_tls_generation);
       _dl_allocate_tls_init (tcbp, true);
     }
+
+  /* Whatever went to the host namespace, before the payload's own closure rather than after it.
+     The loop below follows the payload's dependency order, which reaches a host object only through
+     the proxy standing for it and never reaches a bundle member that only host code wanted -- and it
+     reaches the host object first, so leaving this until afterwards relocates a host library against
+     a dependency that is not ready.  An unrelocated libm is an IFUNC that cannot be resolved, which
+     is how the order was settled.
+
+     After the TLS slotinfo above, because an IFUNC resolver fired during relocation reads
+     thread-local storage.  */
+  _dl_minst_relocate_host_namespace ();
 
   RTLD_TIMING_VAR (start);
   rtld_timer_start (&start);

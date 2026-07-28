@@ -106,6 +106,55 @@ _dl_new_proxy (struct link_map *old, int mode, Lmid_t nsid)
   new->l_proxy = 1;
   new->l_ns = nsid;
 
+  /* What mapping the file established, copied rather than redirected.
+
+     All of it is filled in by _dl_map_object_from_fd and none of it ever changes again, so there is
+     no second copy to keep in step -- the object is where it was loaded, its dynamic section says
+     what it said, and its program headers describe the same segments.  Every one of these is
+     complete before any proxy of the object can exist.
+
+     Copying rather than following l_real is not just convenience.  A proxy is what dlopen hands
+     back, and a handle turns into a struct link_map * that the caller reads directly -- NVIDIA's
+     driver walks l_ld to find the tags it wants.  Nothing in the loader is between that read and
+     the field, so the proxy has to be a faithful description of the object it stands for.  Leaving
+     these zero is what made the driver dereference a null l_ld; poisoning them only moved the
+     fault.
+
+     Left out on purpose: everything execution owns rather than mapping -- l_relocated,
+     l_init_called, l_tls_offset, the opencounts -- which has one home per object and is reached
+     through l_real, and the scope and dependency lists, which are legitimately per-proxy because a
+     proxy sits in a different namespace.  */
+  new->l_addr = old->l_addr;
+  new->l_ld = old->l_ld;
+  new->l_ldnum = old->l_ldnum;
+  new->l_phdr = old->l_phdr;
+  new->l_phnum = old->l_phnum;
+  new->l_entry = old->l_entry;
+  new->l_map_start = old->l_map_start;
+  new->l_map_end = old->l_map_end;
+  memcpy (new->l_info, old->l_info, sizeof (new->l_info));
+
+  /* And the lookup tables that go with them, so a proxy answers a symbol query the same way.  */
+  new->l_nbuckets = old->l_nbuckets;
+  new->l_gnu_bitmask_idxbits = old->l_gnu_bitmask_idxbits;
+  new->l_gnu_shift = old->l_gnu_shift;
+  new->l_gnu_bitmask = old->l_gnu_bitmask;
+  new->l_gnu_buckets = old->l_gnu_buckets;
+  new->l_gnu_chain_zero = old->l_gnu_chain_zero;
+
+  /* The one field a proxy must never answer for itself.  Unlike everything above, the version table
+     is built after mapping -- _dl_check_map_versions runs over the namespace once the closure is
+     known -- so a copy taken here would capture whatever was there at the time, usually nothing.
+     Poisoned rather than left zero so a path that reads it faults at an address that names it
+     instead of at the offset of some field or other:
+
+       0xbadd1b00_0003_0008   l_versions
+
+     Three loader defects were found this way and are fixed: the dependency walk expanding a proxy's
+     DT_NEEDED into the wrong namespace, version checking rebuilding l_versions against the wrong
+     dependencies, and dlclose freeing the real object's tables through a proxy.  */
+  new->l_versions = (void *) (uintptr_t) 0xbadd1b0000030000ULL;
+
   /* Copied from the origin.  */
   new->l_libname = old->l_libname;
   new->l_name = old->l_name;
@@ -231,8 +280,17 @@ _dl_new_object (char *realname, const char *libname, int type,
   /* Counter for the scopes we have to handle.  */
   int idx = 0;
 
-  if (GL(dl_ns)[nsid]._ns_loaded != NULL)
-    /* Add the global scope.  */
+  /* Add the global scope.
+
+     A namespace whose root is stated rather than inferred says so in _ns_main_searchlist, and that
+     is the list to share.  For the base namespace it is the main map's own search list, so this is
+     the same pointer the line below would have produced; for a dlmopen namespace it is null and the
+     first-loaded object is the root, as before.  It differs only for a namespace assembled from
+     objects that arrived independently, where no one of them is the root and taking the first is
+     taking an accident of ordering.  */
+  if (GL(dl_ns)[nsid]._ns_main_searchlist != NULL)
+    new->l_scope[idx++] = GL(dl_ns)[nsid]._ns_main_searchlist;
+  else if (GL(dl_ns)[nsid]._ns_loaded != NULL)
     new->l_scope[idx++] = &GL(dl_ns)[nsid]._ns_loaded->l_searchlist;
 
   /* If we have no loader the new object acts as it.  */

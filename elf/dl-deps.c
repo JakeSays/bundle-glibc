@@ -211,7 +211,13 @@ _dl_map_object_deps (struct link_map *map,
 	  needed = needed_space.data;
 	}
 
-      if (l->l_info[DT_NEEDED] || l->l_info[AUXTAG] || l->l_info[FILTERTAG])
+      /* A proxy is a name in this namespace and a redirect, nothing more.  Whatever it stands for
+	 has its dependencies resolved in the namespace it really lives in, against that namespace's
+	 scope; expanding them again here would map them a second time into the wrong one.  The
+	 proxy itself still belongs in the search list built below -- lookups through it reach the
+	 real object -- so only the expansion is skipped.  */
+      if (!l->l_proxy
+	  && (l->l_info[DT_NEEDED] || l->l_info[AUXTAG] || l->l_info[FILTERTAG]))
 	{
 	  const char *strtab = (const void *) D_PTR (l, l_info[DT_STRTAB]);
 	  struct openaux_args args;

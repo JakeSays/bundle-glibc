@@ -83,6 +83,36 @@ _dl_minst_trace (void)
   return (minst_flags () & MINST_BUNDLE_TRACE) != 0;
 }
 
+bool
+_dl_minst_runtime_library (uint32_t index, const char **name)
+{
+  uint32_t seen = 0;
+
+  for (size_t b = 0; b < minst_nbundles; ++b)
+    {
+      const struct minst_bundle *bundle = &minst_bundles[b];
+      if (bundle->header->type != MINST_BUNDLE_RUNTIME)
+	continue;
+
+      for (uint32_t i = 0; i < bundle->header->count; ++i)
+	{
+	  const struct minst_bundle_entry *entry = &bundle->entries[i];
+	  const char *member = bundle->strings + entry->name;
+
+	  if ((entry->flags & MINST_ENTRY_PRELOAD) == 0)
+	    continue;
+
+	  if (seen++ != index)
+	    continue;
+
+	  *name = member;
+	  return true;
+	}
+    }
+
+  return false;
+}
+
 /* Reads exactly LENGTH bytes, or says it could not.  Every caller here wants a whole header or a
    whole table; a short read of one is not something to carry on from.  */
 static bool

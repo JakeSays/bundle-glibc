@@ -400,8 +400,12 @@ _dl_check_all_versions (struct link_map *map, int verbose, int trace_mode)
   struct link_map *l;
   int result = 0;
 
+  /* Proxies are skipped rather than followed through l_real.  Version checking builds l_versions
+     for the object it is given, and the object behind a proxy has that done once, in the namespace
+     it was mapped into.  Following the redirect here would repeat the work and, worse, do it
+     against this namespace's dependencies rather than its own.  */
   for (l = map; l != NULL; l = l->l_next)
-    result |= (! l->l_faked
+    result |= (! l->l_faked && ! l->l_proxy
 	       && _dl_check_map_versions (l, verbose, trace_mode));
 
   return result;

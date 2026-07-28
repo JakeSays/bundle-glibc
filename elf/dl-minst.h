@@ -81,6 +81,16 @@ extern bool _dl_minst_blank_env (void) attribute_hidden;
    library reaching libc is asking the runtime bundle for it.  */
 extern bool _dl_minst_find (const char *name, struct minst_member *member) attribute_hidden;
 
+/* The runtime bundle's libraries, by index, for bringing the whole of glibc up before the payload is
+   touched.  False once there are no more.
+
+   Only the libraries: the loader is already running, data members are not objects, and the modules
+   glibc opens for itself -- gconv converters, named by path rather than soname -- are plugins loaded
+   when something asks for one.  What is left is what a program links against, and loading all of it
+   up front is what stops a member arriving late, after the payload's closure has been settled, with
+   nothing to relocate it and a scope that predates it.  */
+extern bool _dl_minst_runtime_library (uint32_t index, const char **name) attribute_hidden;
+
 /* The payload bundle's starting member: the program this artifact exists to run.  It is found by the
    flag that marks it, not by a name -- what the program is called is argv[0]'s business, and nothing
    here manufactures an identity for it out of the index.  */
@@ -96,6 +106,12 @@ extern struct link_map *_dl_map_object_from_bundle (ElfW(Off) base_off, int type
    that may reach the machine at all; a sealed one never asks.  */
 extern Lmid_t _dl_minst_host_namespace (void) attribute_hidden;
 
+/* The same, without making one.  LM_ID_BASE means nothing was ever placed, which is the answer for a
+   sealed artifact and for one that simply never reached the machine.  Asking must not create, or
+   every artifact would have a namespace it has no use for.  */
+extern Lmid_t _dl_minst_host_namespace_id (void);
+rtld_hidden_proto (_dl_minst_host_namespace_id)
+
 /* Whether NAME has to come off the machine, and so belongs in the host namespace rather than beside
    the payload.  False for everything when the artifact is sealed, since then nothing does.  */
 extern bool _dl_minst_belongs_to_host (const char *name);
@@ -105,6 +121,39 @@ rtld_hidden_proto (_dl_minst_belongs_to_host)
    cannot do because what it sees of a host library is a proxy with nothing to walk.  Called once the
    payload's closure is complete and before anything is relocated.  */
 extern void _dl_minst_finish_host_namespace (void) attribute_hidden;
+
+/* Relocates what that pass brought in, which the startup loop does not reach: it follows the
+   payload's dependency order, and that order sees a host object only through its proxy and never
+   sees a bundle member that only host code wanted.  Called after the TLS slotinfo is populated, since
+   an IFUNC resolver fired during relocation reads thread-local storage.  */
+extern void _dl_minst_relocate_host_namespace (void) attribute_hidden;
+
+/* Registers the thread-local storage of the host namespace, which the startup pass misses because
+   what it sees of a host library is a proxy and a proxy has none.  Called with that pass, before the
+   generation is bumped and the initial block allocated.  */
+extern void _dl_minst_host_tls (void) attribute_hidden;
+
+/* Rebuilds the host namespace's shared scope from what is currently in it.  Called whenever objects
+   are added, which is at startup and after any dlopen that lands there.  The scope's address never
+   changes, so objects that captured it earlier pick up the new contents without being revisited.  */
+extern void _dl_minst_host_scope_update (void) attribute_hidden;
+
+/* Whether SCOPE is that shared scope.  Everywhere else in the loader an l_scope[] entry is embedded
+   in a link_map -- either that map's own l_symbolic_searchlist or some map's l_searchlist -- and
+   dlclose relies on it, subtracting the offset to recover the owning map.  This one belongs to a
+   namespace rather than to any object in it, so that arithmetic yields nonsense and has to be
+   skipped.  */
+#ifdef SHARED
+extern bool _dl_minst_is_host_scope (struct r_scope_elem *scope) attribute_hidden;
+#else
+/* dl-close.c is linked into ldconfig and sln as well as into the loader, and those have one
+   namespace, no artifact around them and nothing that could have made a shared scope.  */
+static inline bool
+_dl_minst_is_host_scope (struct r_scope_elem *scope)
+{
+  return false;
+}
+#endif
 
 /* Opens a data member as though it were a file of its own, or -1 when there is no such member.
 

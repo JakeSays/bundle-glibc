@@ -33,6 +33,7 @@
 #include <tls.h>
 #include <stap-probe.h>
 #include <dl-find_object.h>
+#include <dl-minst.h>
 
 #include <dl-unmap-segments.h>
 
@@ -332,8 +333,14 @@ _dl_close_worker (struct link_map *map, bool force)
                ++cnt)
 	    /* This relies on l_scope[] entries being always set either
 	       to its own l_symbolic_searchlist address, or some map's
-	       l_searchlist address.  */
-	    if (imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
+	       l_searchlist address.  The host namespace's shared scope is
+	       neither -- it belongs to the namespace, not to any object in
+	       it -- so recovering an owning map from it would read whatever
+	       happens to sit below.  It also outlives any single object:
+	       closing one rebuilds its contents rather than retiring it.  */
+	    if (__glibc_unlikely (_dl_minst_is_host_scope (imap->l_scope[cnt])))
+	      ++remain;
+	    else if (imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
 	      {
 		struct link_map *tmap = (struct link_map *)
 		  ((char *) imap->l_scope[cnt]
@@ -379,7 +386,11 @@ _dl_close_worker (struct link_map *map, bool force)
 	      remain = 0;
 	      for (size_t cnt = 0; imap->l_scope[cnt] != NULL; ++cnt)
 		{
-		  if (imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
+		  /* Kept for the same reason as in the counting loop above: the
+		     shared scope has no owning map to recover, and it is
+		     rebuilt rather than retired.  */
+		  if (!_dl_minst_is_host_scope (imap->l_scope[cnt])
+		      && imap->l_scope[cnt] != &imap->l_symbolic_searchlist)
 		    {
 		      struct link_map *tmap = (struct link_map *)
 			((char *) imap->l_scope[cnt]
@@ -672,11 +683,18 @@ _dl_close_worker (struct link_map *map, bool force)
 	  /* Update the data used by _dl_find_object.  */
 	  _dl_find_object_dlclose (imap);
 
-	  free (imap->l_versions);
-	  if (imap->l_origin != (char *) -1)
-	    free ((char *) imap->l_origin);
+	  /* None of this belongs to a proxy.  The version table, the expanded origin and the
+	     relocation dependencies were built for the object the proxy stands for, and are released
+	     when that object is closed on its own account.  Freeing them here would hand back memory
+	     still in use by the namespace the object really lives in.  */
+	  if (!imap->l_proxy)
+	    {
+	      free (imap->l_versions);
+	      if (imap->l_origin != (char *) -1)
+		free ((char *) imap->l_origin);
 
-	  free (imap->l_reldeps);
+	      free (imap->l_reldeps);
+	    }
 
 	  /* Print debugging message.  */
 	  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
