@@ -19,6 +19,7 @@
 
 #include <dl-minst.h>
 
+#include <dl-minst-bundle.h>
 #include <elf.h>
 #include <ldsodefs.h>
 #include <link.h>
@@ -47,11 +48,36 @@ static int minst_fd = -1;
 static struct minst_bundle minst_bundles[MAX_BUNDLES];
 static size_t minst_nbundles;
 
+/* Stage zero's dynamic array, which exists only to carry DT_DEBUG.  Its address is taken straight
+   from the program header because stage zero is not position independent, so what it was linked at
+   is where it is.  NULL when the artifact was built before stage zero carried one, and then nothing
+   below happens.  */
+static ElfW(Dyn) *minst_stage0_dynamic;
+
 int
 _dl_minst_fd (void)
 {
   return minst_fd;
 }
+
+/* Handed to libc so it can bring the bundle filesystem up against the artifact this process is
+   running out of.  Filled in once, when there is an artifact at all, and read from libc afterwards.
+
+   The image list is empty: nothing writes an EROFS image into an artifact yet.  libc treats that as
+   an artifact with nothing to serve, which is what it is.  */
+static struct minst_bundle_view minst_view;
+
+const struct minst_bundle_view *
+_dl_minst_bundle_view (void)
+{
+  if (minst_fd < 0)
+    return NULL;
+
+  minst_view.descriptor = minst_fd;
+
+  return &minst_view;
+}
+rtld_hidden_def (_dl_minst_bundle_view)
 
 /* Taken from the payload bundle, which is the one describing the artifact rather than the runtime
    inside it.  Zero when there is no artifact, so a loader running outside one behaves as it did.  */
@@ -207,6 +233,12 @@ read_bundles (void)
 
   for (unsigned int i = 0; i < header.e_phnum; ++i)
     {
+      if (phdrs[i].p_type == PT_DYNAMIC && phdrs[i].p_filesz != 0)
+	{
+	  minst_stage0_dynamic = (ElfW(Dyn) *) phdrs[i].p_vaddr;
+	  continue;
+	}
+
       if (phdrs[i].p_type != PT_NOTE || phdrs[i].p_filesz == 0)
 	continue;
 
@@ -309,6 +341,25 @@ _dl_minst_find (const char *name, struct minst_member *member)
     }
 
   return false;
+}
+
+void
+_dl_minst_publish_rendezvous (ElfW(Addr) address)
+{
+  if (minst_stage0_dynamic == NULL)
+    return;
+
+  /* A debugger reads DT_DEBUG out of the executable's dynamic segment to find the rendezvous
+     structure, and from there the chain of everything loaded.  Ordinarily the loader fills that in
+     on the program it started; here the program the kernel started is stage zero, which has no
+     dynamic segment of its own except the one it carries for exactly this.  Without it a debugger
+     concludes that nothing is loaded and every frame is unresolvable.  */
+  for (ElfW(Dyn) *entry = minst_stage0_dynamic; entry->d_tag != DT_NULL; ++entry)
+    if (entry->d_tag == DT_DEBUG)
+      {
+	entry->d_un.d_ptr = address;
+	return;
+      }
 }
 
 int

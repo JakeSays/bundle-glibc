@@ -24,6 +24,7 @@
 #include <sys/single_threaded.h>
 #include <getrandom-internal.h>
 #include <malloc/malloc-internal.h>
+#include <bundlefs-early-init.h>
 
 #ifdef SHARED
 _Bool __libc_initial;
@@ -48,4 +49,9 @@ __libc_early_init (_Bool initial)
 
   /* Initialize system malloc (needs __libc_initial to be set).  */
   call_function_static_weak (__ptmalloc_init);
+
+  /* Bring up the bundle filesystem, which needs a real allocator and so goes after malloc.  Nothing
+     before this reads a file, and the first file access that is not the loader resolving a shared
+     object happens in a constructor, which is after all of it.  */
+  __bfs_early_init ();
 }

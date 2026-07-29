@@ -1,0 +1,3 @@
+[submodule "third_party/bundlefs"]
+	path = third_party/bundlefs
+	url = git@github.com:JakeSays/bundlefs.git

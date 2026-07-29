@@ -155,6 +155,12 @@ _dl_minst_is_host_scope (struct r_scope_elem *scope)
 }
 #endif
 
+/* Points stage zero's DT_DEBUG at ADDRESS, which is where a debugger looks to find everything else.
+   Stage zero carries a dynamic segment holding that one entry and nothing else; it cannot fill it in
+   itself, having handed control away before there was anything to point at.  Does nothing for an
+   artifact whose stage zero has no such segment.  */
+extern void _dl_minst_publish_rendezvous (ElfW(Addr) address) attribute_hidden;
+
 /* Opens a data member as though it were a file of its own, or -1 when there is no such member.
 
    The member's bytes are copied into an anonymous file rather than the artifact being handed over at

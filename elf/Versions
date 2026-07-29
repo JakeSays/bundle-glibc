@@ -79,5 +79,8 @@ ld {
     # Set value of a tunable.
     __tunable_is_initialized;
     __tunable_get_val;
+
+    # What the loader knows about the artifact, for libc to bring the bundle filesystem up against.
+    _dl_minst_bundle_view;
   }
 }

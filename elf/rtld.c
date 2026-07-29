@@ -1731,6 +1731,14 @@ dl_main (const ElfW(Phdr) *phdr,
   /* Set up debugging before the debugger is notified for the first time.  */
   elf_setup_debug_entry (main_map, r);
 
+  /* And in stage zero, which is the file the kernel actually started and therefore the only one a
+     debugger will read DT_DEBUG from.  The call above sets it in main_map, but in an artifact that
+     is the payload, taken out of a bundle and mapped by us -- nothing outside the process has any
+     reason to look at its dynamic segment, and a debugger never does.  Without this the search for
+     the rendezvous structure stops at the outer file and the process appears to have nothing
+     loaded at all.  */
+  _dl_minst_publish_rendezvous ((ElfW(Addr)) r);
+
   /* We start adding objects.  */
   _dl_debug_change_state (r, RT_ADD);
   LIBC_PROBE (init_start, 2, LM_ID_BASE, r);
