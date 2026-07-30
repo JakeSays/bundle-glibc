@@ -17,9 +17,11 @@
    <https://www.gnu.org/licenses/>.  */
 
 #include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <sys/stat.h>
 
 #include <sysdep-cancel.h>
 
@@ -50,6 +52,20 @@ __libc_openat64 (int fd, const char *file, int oflag, ...)
 
       if (carried >= 0)
 	return carried;
+
+      /* Carried, but not openable this way -- see open64.c for why this is answered here rather
+	 than fallen through to a kernel that has never heard of the path.  */
+      struct stat64 described;
+
+      if (__bfs_stat_path (resolved, &described) == 0)
+	{
+	  __set_errno ((oflag & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) != 0
+		       ? EROFS
+		       : ((oflag & O_DIRECTORY) != 0 && !S_ISDIR (described.st_mode)
+			  ? ENOTDIR
+			  : EIO));
+	  return -1;
+	}
     }
 #endif
 

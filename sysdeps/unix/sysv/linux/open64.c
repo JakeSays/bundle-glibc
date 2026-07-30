@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sysdep-cancel.h>
@@ -41,13 +42,26 @@ __libc_open64 (const char *file, int oflag, ...)
 
   /* The artifact first, and the machine when it carries nothing there. A bundled path has to win:
      the point of mounting one is that the program opens what it was built against rather than
-     whatever the machine happens to have at the same name.
-
-     Weakly referenced, for the reason read.c gives.  */
+     whatever the machine happens to have at the same name.  */
 #if IS_IN (libc)
   int carried = __bfs_open_path (file, oflag);
   if (carried >= 0)
     return carried;
+
+  /* Carried, but not openable this way. Answered here rather than fallen through: the kernel has
+     never heard of these paths and says ENOENT, which is a different statement -- the file is there
+     and the request is what is wrong. Reporting otherwise sends a caller looking for a missing file.  */
+  struct stat64 described;
+
+  if (__bfs_stat_path (file, &described) == 0)
+    {
+      __set_errno ((oflag & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) != 0
+		   ? EROFS
+		   : ((oflag & O_DIRECTORY) != 0 && !S_ISDIR (described.st_mode)
+		      ? ENOTDIR
+		      : EIO));
+      return -1;
+    }
 #endif
 
   return SYSCALL_CANCEL (openat, AT_FDCWD, file, oflag | O_LARGEFILE,

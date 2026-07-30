@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- The second artifact: one that is allowed to reach the machine.
+
+     The first is sealed and proves nothing resolves off the machine. This one proves the opposite
+     half, which is a different artifact rather than a different check: a manifest says one or the
+     other, and the whole point of sealing is that it is not a per-call decision.
+
+     What it carries is a plugin whose DT_NEEDED names a library the artifact does not have. That is
+     the only shape which reaches the loader path this exists to cover -- everything else an artifact
+     loads from the machine gets there through dlopen from inside a bundled library, which walks the
+     closure properly. The two host libraries are built into the scratch directory by the driver and
+     found through the plugin's RUNPATH. -->
+
+<bundle type="main" name="bundlefs-host" version="1">
+
+    <program path="$(BUILD)/host-payload"/>
+
+    <contents>
+        <!-- A directory rather than a file, and mounted at the parent: a plugin is opened by path,
+             and a mount creates only the path it names. -->
+        <directory from="$(BUILD)/carried" glob="**/*.so" mount-point="/minst/lib"/>
+    </contents>
+
+    <libc-dependency path="$(BUILD)/runtime.bundle"/>
+
+    <host allow="true"/>
+
+</bundle>

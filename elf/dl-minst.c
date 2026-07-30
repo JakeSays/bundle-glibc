@@ -110,6 +110,18 @@ _dl_minst_bundle_view (void)
 
       minst_view.images = minst_mounts;
       minst_view.image_count = taken;
+
+      /* Handed over as they sit in the note. Nothing here has to be resolved against an image the
+	 way a mount does, so there is nothing to copy and no reason to bound how many there may
+	 be.  */
+      if (minst_note->environment_count != 0)
+	{
+	  minst_view.environment
+	    = (const void *) ((const unsigned char *) minst_note
+			      + minst_note->environment_offset);
+	  minst_view.environment_count = minst_note->environment_count;
+	  minst_view.strings = minst_note_strings;
+	}
     }
 
   return &minst_view;
@@ -195,6 +207,11 @@ view_is_sound (const struct minst_view_header *header, uint32_t descsz)
     return false;
   if (header->soname_count
       > (descsz - header->soname_offset) / sizeof (struct minst_view_soname))
+    return false;
+  if (header->environment_offset > descsz)
+    return false;
+  if (header->environment_count
+      > (descsz - header->environment_offset) / sizeof (struct minst_view_environment))
     return false;
   return true;
 }
@@ -436,6 +453,189 @@ _dl_minst_open_member (const char *name)
 failed:
   __close_nocancel (fd);
   return -1;
+}
+
+/* Any proxy still standing for MAP at the moment MAP is freed.
+ *
+ * A proxy is a shell around another namespace's object: it copies the mapping but shares the name and
+ * the name list, which is what makes _dl_name_match_p answer the same for both. Sharing means the
+ * proxy holds no reference -- freeing the object frees the strings out from under it, and the next
+ * walk of the proxy's namespace reads a name pointer into memory the allocator has handed out again.
+ * The proxy itself is untouched, so nothing marks it dead and every structural check passes.  */
+void
+_dl_minst_check_proxies (struct link_map *map)
+{
+  if (__glibc_likely ((GLRO(dl_debug_mask) & DL_DEBUG_FILES) == 0))
+    return;
+
+  for (Lmid_t ns = 0; ns < DL_NNS; ++ns)
+    for (struct link_map *l = GL(dl_ns)[ns]._ns_loaded; l != NULL; l = l->l_next)
+      if (l->l_proxy && l->l_real == map)
+	_dl_debug_printf ("minst: freeing %s [%lu] at %lx, which the proxy at %lx in namespace %lu"
+			  " stands for and takes its name from\n",
+			  DSO_FILENAME (map->l_name), map->l_ns,
+			  (unsigned long int) (uintptr_t) map,
+			  (unsigned long int) (uintptr_t) l, (unsigned long int) ns);
+}
+
+/* Every search list in every namespace, checked against what the loader still has loaded.
+ *
+ * A map is reachable from its namespace's list for as long as it exists, so an entry that is not
+ * reachable has been freed -- and a lookup walking that list will read a symbol table out of memory
+ * the allocator has since given to somebody else.
+ *
+ * Diagnostic rather than a repair. It is called at the points that bracket the operations under
+ * suspicion, and WHEN says which one it was, so that a list going bad can be attributed to something
+ * narrower than "somewhere during startup". Quiet unless something is wrong, so leaving the calls in
+ * costs a walk under the trace flag and nothing otherwise.  */
+void
+_dl_minst_check_scopes (const char *when)
+{
+  if (__glibc_likely ((GLRO(dl_debug_mask) & DL_DEBUG_FILES) == 0))
+    return;
+
+  unsigned int lists = 0;
+  unsigned int entries = 0;
+  unsigned int bad = 0;
+
+  /* Whether any object is linked into two namespace lists.
+     l_next holds one successor, so a map in two lists gives one of them a chain that belongs to the
+     other -- and a walk following it leaves the list entirely and reads whatever is there. That is
+     what a crash in an unrelated heap block looks like when nothing has been freed.
+     Bounded as well: a chain that does not end is the same fault seen from the other side.  */
+  for (Lmid_t ns = 0; ns < DL_NNS; ++ns)
+    {
+      unsigned int walked = 0;
+
+      for (struct link_map *l = GL(dl_ns)[ns]._ns_loaded; l != NULL; l = l->l_next)
+	{
+	  if (++walked > 4096)
+	    {
+	      ++bad;
+	      _dl_debug_printf ("minst: %s: namespace %lu chain does not end\n",
+				when, (unsigned long int) ns);
+	      break;
+	    }
+
+	  for (Lmid_t other = ns + 1; other < DL_NNS; ++other)
+	    {
+	      unsigned int scanned = 0;
+
+	      for (struct link_map *o = GL(dl_ns)[other]._ns_loaded;
+		   o != NULL && ++scanned <= 4096; o = o->l_next)
+		if (o == l)
+		  {
+		    ++bad;
+		    _dl_debug_printf ("minst: %s: object %lx (%s) is linked into namespace %lu"
+				      " and namespace %lu\n",
+				      when, (unsigned long int) (uintptr_t) l,
+				      DSO_FILENAME (l->l_name),
+				      (unsigned long int) ns, (unsigned long int) other);
+		    break;
+		  }
+	    }
+	}
+    }
+
+  /* The namespace lists themselves, first.
+     Everything below is checked by asking whether an object is reachable from one of these, which
+     answers nothing if the list has a freed object in it -- and a freed object still linked is what
+     _dl_lookup_map walks when it compares names, reading a name pointer out of reused memory.
+     A map records the namespace it belongs to, so a map found in a list that disagrees is not one.  */
+  for (Lmid_t ns = 0; ns < DL_NNS; ++ns)
+    {
+      unsigned int position = 0;
+
+      for (struct link_map *l = GL(dl_ns)[ns]._ns_loaded; l != NULL; l = l->l_next, ++position)
+	if (l->l_ns == (Lmid_t) 0x6D696E73 || l->l_real == NULL
+	    || l->l_ns != ns || (!l->l_proxy && l->l_real != l))
+	  {
+	    ++bad;
+	    _dl_debug_printf ("minst: %s: namespace %lu holds a stale object at position %u,"
+			      " address %lx (says ns %lu, real %lx)\n",
+			      when, (unsigned long int) ns, position,
+			      (unsigned long int) (uintptr_t) l,
+			      l->l_ns, (unsigned long int) (uintptr_t) l->l_real);
+	    break;
+	  }
+    }
+
+  for (Lmid_t ns = 0; ns < DL_NNS; ++ns)
+    for (struct link_map *map = GL(dl_ns)[ns]._ns_loaded; map != NULL; map = map->l_next)
+      {
+	if (map->l_searchlist.r_list == NULL)
+	  continue;
+
+	++lists;
+
+	for (unsigned int i = 0; i < map->l_searchlist.r_nlist; ++i)
+	  {
+	    ++entries;
+	    struct link_map *entry = map->l_searchlist.r_list[i];
+	    bool loaded = false;
+
+	    if (entry != NULL && (unsigned int) entry->l_ns < DL_NNS)
+	      for (struct link_map *l = GL(dl_ns)[entry->l_ns]._ns_loaded;
+		   l != NULL; l = l->l_next)
+		if (l == entry)
+		  {
+		    loaded = true;
+		    break;
+		  }
+
+	    if (!loaded)
+	      {
+		++bad;
+		_dl_debug_printf ("minst: %s: search list of %s [%lu] entry %u at %lx"
+				  " is not a loaded object\n",
+				  when, DSO_FILENAME (map->l_name), map->l_ns, i,
+				  (unsigned long int) (uintptr_t) entry);
+	      }
+	  }
+      }
+
+  /* And the namespace's own shared scope, which belongs to no object and so is not reached by the
+     walk above. An object leaving the namespace is what would strand an entry here: the array is
+     rebuilt only when something arrives.
+
+     Shared only, as the scope itself is: a static libc has no loader and no second namespace.  */
+#ifdef SHARED
+  struct r_scope_elem *shared = _dl_minst_host_scope ();
+
+  if (shared != NULL && shared->r_list != NULL)
+    {
+      ++lists;
+
+      for (unsigned int i = 0; i < shared->r_nlist; ++i)
+	{
+	  struct link_map *entry = shared->r_list[i];
+	  bool loaded = false;
+
+	  ++entries;
+
+	  if (entry != NULL && (unsigned int) entry->l_ns < DL_NNS)
+	    for (struct link_map *l = GL(dl_ns)[entry->l_ns]._ns_loaded; l != NULL; l = l->l_next)
+	      if (l == entry)
+		{
+		  loaded = true;
+		  break;
+		}
+
+	  if (!loaded)
+	    {
+	      ++bad;
+	      _dl_debug_printf ("minst: %s: the host namespace's shared scope entry %u at %lx"
+				" is not a loaded object\n",
+				when, i, (unsigned long int) (uintptr_t) entry);
+	    }
+	}
+    }
+#endif
+
+  /* Always, so that a clean result is evidence the walk happened rather than evidence of nothing.
+     A check that silently did not run looks exactly like a check that passed.  */
+  _dl_debug_printf ("minst: %s: checked %u list(s), %u entr(ies), %u bad\n",
+		    when, lists, entries, bad);
 }
 
 bool

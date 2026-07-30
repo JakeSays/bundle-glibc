@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <ldsodefs.h>
 #include <libintl.h>
+#include "dl-minst.h"
 
 #include <assert.h>
 
@@ -164,14 +165,38 @@ _dl_new_proxy (struct link_map *old, int mode, Lmid_t nsid)
   if (__glibc_unlikely (mode & RTLD_NODELETE))
     new->l_flags_1 |= DF_1_NODELETE;
 
-  /* Specific to the origin.  Ideally we'd do some accounting here but
-     for now it's easier to pin the original so the proxy remains valid.  */
-  if (old->l_type == lt_loaded)
-    old->l_flags_1 |= DF_1_NODELETE;
+  /* The object a proxy stands for has to outlive it.  A proxy borrows the name and the name list
+     rather than copying them -- that is what makes the two answer _dl_name_match_p alike -- and it
+     reaches everything execution owns through l_real, so freeing the origin leaves the proxy naming
+     memory the allocator has handed out again.  Nothing counts the proxy as a reference: it lives in
+     another namespace, and the garbage collection dlclose runs covers one namespace at a time and
+     cannot see it.
 
-  /* Fix up the searchlist so that relocations work.  */
-  _dl_map_object_deps (new, NULL, 0, 0,
-		       mode & (__RTLD_DLOPEN | RTLD_DEEPBIND | __RTLD_AUDIT));
+     l_nodelete_active rather than DF_1_NODELETE in l_flags_1, which is where this used to be written.
+     The flags word is read from the object's own dynamic section when it is mapped and nothing
+     consults it afterwards; dlclose decides on l_nodelete_active, which is what _dl_open sets when it
+     is asked for RTLD_NODELETE.  Setting the other one pinned nothing.
+
+     Unconditional, where it used to apply only to lt_loaded.  An object that arrived as somebody's
+     dependency is lt_library and was left unpinned, and those are most of what crosses the fence:
+     the platform plugin's DT_NEEDED on libxcb-util is a host library proxied into the payload's
+     namespace, and a driver's dlclose collected it while the plugin was still using it.  */
+  old->l_nodelete_active = 1;
+
+  /* Fix up the searchlist so that relocations work.
+
+     Not while a dependency walk is already running, which is the common case here: a walk resolving
+     a dependency from a non-base namespace lands in openaux, which makes a proxy, which arrives
+     here. Walking now would clear the l_reserved marks the outer walk is using to avoid listing an
+     object twice, and it would then append objects it had already appended -- ending with a search
+     list holding more entries than it counted and slots it never filled. A lookup walking one of
+     those reads a link_map out of whatever the allocator has since put there.
+
+     The finishing pass builds what is skipped: _dl_minst_close_over_host runs once the closure is
+     complete and gives a searchlist to every proxy that has none.  */
+  if (_dl_minst_deps_depth == 0)
+    _dl_map_object_deps (new, NULL, 0, 0,
+			 mode & (__RTLD_DLOPEN | RTLD_DEEPBIND | __RTLD_AUDIT));
 
   /* And finally put the proxy in the target namespace.  */
   _dl_add_to_namespace_list (new, nsid);

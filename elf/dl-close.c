@@ -345,8 +345,26 @@ _dl_close_worker (struct link_map *map, bool force)
 		struct link_map *tmap = (struct link_map *)
 		  ((char *) imap->l_scope[cnt]
 		   - offsetof (struct link_map, l_searchlist));
-		assert (tmap->l_ns == nsid);
-		if (tmap->l_idx == IDX_STILL_USED)
+
+		/* A scope entry owned by another namespace, which this loader's cross-namespace
+		   binding puts here: a bundled object dlopened against host code has the host
+		   namespace in its scope. Upstream asserts here because it never has one.
+
+		   l_idx is assigned by the walk this close is doing and means nothing outside the
+		   namespace being closed, so it cannot answer whether that map survives. l_removed
+		   can: it is per-map state rather than per-close bookkeeping.
+
+		   Both answers have to be available. Keeping an entry whose map is being freed
+		   leaves the scope pointing into freed memory, and the fault lands much later, in
+		   a symbol lookup walking a link_map full of rubbish.  */
+		if (__glibc_unlikely (tmap->l_ns != nsid))
+		  {
+		    if (tmap->l_removed)
+		      removed_any = true;
+		    else
+		      ++remain;
+		  }
+		else if (tmap->l_idx == IDX_STILL_USED)
 		  ++remain;
 		else
 		  removed_any = true;
@@ -701,6 +719,10 @@ _dl_close_worker (struct link_map *map, bool force)
 	    _dl_debug_printf ("\nfile=%s [%lu];  destroying link map\n",
 			      imap->l_name, imap->l_ns);
 
+#ifdef SHARED
+	  _dl_minst_check_proxies (imap);
+#endif
+
           /* Skip structures borrowed by proxies from the real map.  */
           if (!imap->l_proxy)
             {
@@ -737,6 +759,14 @@ _dl_close_worker (struct link_map *map, bool force)
 	  /* Clear GL(dl_initfirst) when freeing its link_map memory.  */
 	  if (imap == GL(dl_initfirst))
 	    GL(dl_initfirst) = NULL;
+
+	  /* Marked dead before the memory goes back, so that anything still pointing at it can say so
+	     rather than reading whatever the allocator hands out next.
+	     Testing a freed map for plausibility does not work: its fields are whatever was written
+	     over them, and rubbish passes a plausibility test often enough to be useless. A value
+	     nothing else uses does not.  */
+	  imap->l_ns = (Lmid_t) 0x6D696E73;
+	  imap->l_real = NULL;
 
 	  free (imap);
 	}
@@ -775,6 +805,22 @@ _dl_close_worker (struct link_map *map, bool force)
     do
       --GL(dl_nns);
     while (GL(dl_ns)[GL(dl_nns) - 1]._ns_loaded == NULL);
+
+  /* The host namespace's shared scope is a snapshot of its loaded objects, rebuilt whenever one
+     arrives. Objects leave here, and a snapshot taken before that still names what has just been
+     freed -- so a lookup through the shared scope reads a link_map out of memory the allocator has
+     since handed to somebody else.
+
+     Reached by a failed dlopen as much as by a real dlclose: glibc cleans up a partial open through
+     this function, and the object was already in the namespace, and so already in the scope, by the
+     time it failed. That is the path a driver takes when it probes for a library it can do without.
+
+     Shared only: the host namespace is an arrangement the loader makes, and a static libc has no
+     loader to make it.  */
+#ifdef SHARED
+  if (nsid != LM_ID_BASE)
+    _dl_minst_host_scope_update ();
+#endif
 
   /* Recheck if we need to retry, release the lock.  */
  out:

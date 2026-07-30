@@ -1931,6 +1931,8 @@ dl_main (const ElfW(Phdr) *phdr,
      objects their own closure now, while there is still a relocation pass ahead of them.  */
   _dl_minst_finish_host_namespace ();
 
+  _dl_minst_check_scopes ("host namespace finished");
+
   /* Mark all objects as being in the global scope.  */
   for (i = main_map->l_searchlist.r_nlist; i > 0; )
     main_map->l_searchlist.r_list[--i]->l_global = 1;

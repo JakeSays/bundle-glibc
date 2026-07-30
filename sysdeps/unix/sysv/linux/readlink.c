@@ -17,6 +17,7 @@
    <https://www.gnu.org/licenses/>.  */
 
 #include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sysdep.h>
@@ -28,12 +29,27 @@ ssize_t
 __readlink (const char *path, char *buf, size_t len)
 {
   /* A link the artifact carries. The target is recorded in the image and is not followed here, which
-     is what readlink is for.  */
+     is what readlink is for.
+
+     A carried path that is not a link is EINVAL, and answering it here rather than falling through
+     is the whole point: the kernel has never heard of these paths and says ENOENT, which means
+     something else entirely. realpath asks this of every component of every path it is given and
+     reads ENOENT as "does not exist" -- so a carried directory looked like a missing one, realpath
+     failed, and Qt silently dropped every plugin path that would not canonicalize.
+
+     Falling through is only right when the artifact carries nothing there. When it does carry the
+     path, this has to answer, even when the answer is a failure.  */
 #if IS_IN (libc)
   ssize_t carried = __bfs_readlink_path (path, buf, len);
 
   if (carried >= 0)
     return carried;
+
+  if (__bfs_carries (path))
+    {
+      __set_errno (EINVAL);
+      return -1;
+    }
 #endif
 
 #ifdef __NR_readlink

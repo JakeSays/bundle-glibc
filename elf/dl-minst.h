@@ -119,7 +119,9 @@ rtld_hidden_proto (_dl_minst_belongs_to_host)
 
 /* Gives everything placed in the host namespace its dependency closure, which the payload's own walk
    cannot do because what it sees of a host library is a proxy with nothing to walk.  Called once the
-   payload's closure is complete and before anything is relocated.  */
+   payload's closure is complete and before anything is relocated -- at startup, and again after every
+   dlopen, since a dlopened object reaches the machine the same way the payload does and leaves the
+   same gap behind it.  Idempotent: an object that already has a closure is passed over.  */
 extern void _dl_minst_finish_host_namespace (void) attribute_hidden;
 
 /* Relocates what that pass brought in, which the startup loop does not reach: it follows the
@@ -131,7 +133,7 @@ extern void _dl_minst_relocate_host_namespace (void) attribute_hidden;
 /* Registers the thread-local storage of the host namespace, which the startup pass misses because
    what it sees of a host library is a proxy and a proxy has none.  Called with that pass, before the
    generation is bumped and the initial block allocated.  */
-extern void _dl_minst_host_tls (void) attribute_hidden;
+extern bool _dl_minst_host_tls (void) attribute_hidden;
 
 /* Rebuilds the host namespace's shared scope from what is currently in it.  Called whenever objects
    are added, which is at startup and after any dlopen that lands there.  The scope's address never
@@ -168,5 +170,27 @@ extern void _dl_minst_publish_rendezvous (ElfW(Addr) address) attribute_hidden;
    own arithmetic from the start of what it is given, and teaching two subsystems to work at an offset
    is far more surface than copying a configuration file.  Nothing is copied until something asks.  */
 extern int _dl_minst_open_member (const char *name) attribute_hidden;
+
+/* How many dependency walks are running, defined in dl-deps.c.
+
+   A walk marks the objects it lists with l_reserved and clears them at the end, which is the only
+   thing stopping it listing one twice. A second walk starting inside the first clears those marks
+   underneath it. Proxy creation is where that happens -- a walk makes a proxy, and making a proxy
+   used to walk -- so the proxy's own walk is deferred to the finishing pass when this is nonzero.  */
+extern int _dl_minst_deps_depth attribute_hidden;
+
+/* Checks every search list against what is still loaded, reporting entries that have been freed.
+   WHEN names the point it was called from, so a list that goes bad can be pinned to one operation
+   rather than to startup in general. Does nothing unless the trace flag is on.  */
+extern void _dl_minst_check_scopes (const char *when) attribute_hidden;
+
+/* The host namespace's shared scope, or NULL when there is no host namespace.  */
+extern struct r_scope_elem *_dl_minst_host_scope (void) attribute_hidden;
+
+/* Reports any proxy that stands for MAP, which is about to be freed. A proxy borrows the real
+   object's name and name list rather than copying them, so an object destroyed while a proxy stands
+   for it leaves that proxy naming freed memory -- and the next search of the proxy's namespace
+   compares against it. Does nothing unless the trace flag is on.  */
+extern void _dl_minst_check_proxies (struct link_map *map) attribute_hidden;
 
 #endif /* dl-minst.h */

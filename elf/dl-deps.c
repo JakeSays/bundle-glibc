@@ -142,11 +142,25 @@ preload (struct list *known, unsigned int *nlist, struct link_map *map)
   map->l_reserved = 1;
 }
 
+/* How many dependency walks are in progress.
+
+   A walk marks every object it lists with l_reserved and clears them all at the end, which is its
+   only defence against listing one twice. A second walk starting while the first is still going
+   clears those marks underneath it, and the first then appends objects it has already appended --
+   leaving its search list with more entries than it counted and slots that were never filled.
+
+   That happens here: a dependency resolved from a non-base namespace is given a proxy, and building
+   a proxy ends by walking its dependencies. So the walk creates a proxy, and the proxy starts a walk.
+   Deferring the inner one is what keeps the outer one's marks meaning what it thinks they mean.  */
+int _dl_minst_deps_depth attribute_hidden;
+
 void
 _dl_map_object_deps (struct link_map *map,
 		     struct link_map **preloads, unsigned int npreloads,
 		     int trace_mode, int open_mode)
 {
+  ++_dl_minst_deps_depth;
+
   struct list *known = __alloca (sizeof *known * (1 + npreloads + 1));
   struct list *runp, *tail;
   unsigned int nlist, i;
@@ -535,6 +549,32 @@ cannot load auxiliary `%s' because of empty dynamic string token "
       runp->map->l_reserved = 0;
     }
 
+  /* Every entry has to be an object the loader still knows about.
+     A real map is always reachable from its namespace's list; a freed one is not, and a freed one is
+     what a lookup walking this list would read a symbol table out of. Checked here so that a bad
+     entry is reported where it was put in the list rather than where somebody later trips over it.  */
+  if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+    for (i = 0; i < map->l_searchlist.r_nlist; ++i)
+      {
+	struct link_map *entry = map->l_searchlist.r_list[i];
+	bool known_to_loader = false;
+
+	if (entry != NULL && (unsigned int) entry->l_ns < DL_NNS)
+	  for (struct link_map *l = GL(dl_ns)[entry->l_ns]._ns_loaded;
+	       l != NULL; l = l->l_next)
+	    if (l == entry)
+	      {
+		known_to_loader = true;
+		break;
+	      }
+
+	if (!known_to_loader)
+	  _dl_debug_printf ("minst: search list of %s [%lu] entry %u at %lx"
+			    " is not a loaded object\n",
+			    DSO_FILENAME (map->l_name), map->l_ns, i,
+			    (unsigned long int) (uintptr_t) entry);
+      }
+
   /* Maybe we can remove some relocation dependencies now.  */
   struct link_map_reldeps *l_reldeps = NULL;
   if (map->l_reldeps != NULL)
@@ -612,6 +652,8 @@ cannot load auxiliary `%s' because of empty dynamic string token "
     }
   if (old_l_initfini != NULL)
     _dl_scope_free (old_l_initfini);
+
+  --_dl_minst_deps_depth;
 
   if (errno_reason)
     _dl_signal_exception (errno_reason == -1 ? 0 : errno_reason,

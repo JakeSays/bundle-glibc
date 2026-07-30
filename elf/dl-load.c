@@ -2069,6 +2069,15 @@ _dl_minst_host_scope_update (void)
       }
 }
 
+/* The shared scope itself, for the check in dl-minst.c.
+   It belongs to the namespace rather than to any object, so walking every map's search list does not
+   reach it -- which is why a stale entry here survived that walk being clean.  */
+struct r_scope_elem *
+_dl_minst_host_scope (void)
+{
+  return minst_host_ns == LM_ID_BASE ? NULL : &minst_host_scope;
+}
+
 bool
 _dl_minst_is_host_scope (struct r_scope_elem *scope)
 {
@@ -2187,6 +2196,13 @@ _dl_minst_finish_host_namespace (void)
 
   /* Everything that was going to arrive has arrived, so the shared scope can be filled in.  */
   _dl_minst_host_scope_update ();
+
+  /* And the namespace is whole again, which has to be said rather than left implied.
+     Mapping an object moves the namespace it lands in to RT_ADD, and dlopen returns exactly one
+     namespace to RT_CONSISTENT afterwards -- the one holding the map it hands back. Objects this pass
+     brings in land next door instead, so nothing was going to say it for them, and the next dlopen
+     that targets the host namespace finds it mid-update and asserts.  */
+  _dl_debug_change_state (_dl_debug_update (minst_host_ns), RT_CONSISTENT);
 }
 
 /* Registers the thread-local storage of everything in the host namespace.
@@ -2196,12 +2212,19 @@ _dl_minst_finish_host_namespace (void)
    registered.  A library whose thread-locals were never given a slot reads them from nothing, which
    is a null dereference at whatever offset the variable sits.
 
-   Through l_real for the same reason, and only for objects that have any.  */
-void
+   Through l_real for the same reason, and only for objects that have any.
+
+   Returns whether it registered anything, which the caller needs in order to know whether the TLS
+   generation has to move.  _dl_add_to_slotinfo stamps each entry with the generation after this one,
+   and _dl_allocate_tls_init refuses to see a slot newer than the current generation -- so an entry
+   added without a bump behind it is an assertion the first time a thread sets up its storage.  */
+bool
 _dl_minst_host_tls (void)
 {
   if (minst_host_ns == LM_ID_BASE)
-    return;
+    return false;
+
+  bool registered = false;
 
   for (struct link_map *l = GL(dl_ns)[minst_host_ns]._ns_loaded; l != NULL; l = l->l_next)
     {
@@ -2227,7 +2250,11 @@ _dl_minst_host_tls (void)
 	 object use initial-exec at all.  */
       if (l->l_tls_offset == NO_TLS_OFFSET)
 	_dl_allocate_static_tls (l);
+
+      registered = true;
     }
+
+  return registered;
 }
 
 /* Relocates everything the pass above brought in.
@@ -2332,6 +2359,20 @@ _dl_lookup_map (Lmid_t nsid, const char *name)
   /* Look for this name among those already loaded.  */
   for (struct link_map *l = GL(dl_ns)[nsid]._ns_loaded; l; l = l->l_next)
     {
+      /* An object that has been freed and left linked here. dl-close.c stamps l_ns before the memory
+	 goes back, so this recognises one without reading anything the freed map points at -- which
+	 is what the name comparison below would do, on a pointer that is now whatever the allocator
+	 handed out next.
+	 Reported and skipped: walking off a stale l_next would be worse, and stopping the search
+	 here would answer "not loaded" for objects that are.  */
+      if (__glibc_unlikely (l->l_ns == (Lmid_t) 0x6D696E73))
+	{
+	  _dl_debug_printf ("minst: namespace %lu still links a freed object at %lx"
+			    " while looking for %s\n",
+			    (unsigned long int) nsid, (unsigned long int) (uintptr_t) l, name);
+	  continue;
+	}
+
       /* If the requested name matches the soname of a loaded object,
 	 use that object.  Elide this check for names that have not
 	 yet been opened.  */

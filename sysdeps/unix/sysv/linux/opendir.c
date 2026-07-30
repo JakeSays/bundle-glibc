@@ -97,11 +97,21 @@ __opendir (const char *name)
     return NULL;
 
   /* A directory the artifact carries, whose descriptor holds no entries: getdents64 reads them out of
-     the image when something asks. Weakly referenced, for the reason read.c gives.  */
+     the image when something asks.  */
 #if IS_IN (libc)
   int carried = __bfs_opendir_fd (name);
   if (carried >= 0)
     return opendir_tail (carried);
+
+  /* Carried, but not a directory. ENOTDIR here rather than the kernel's ENOENT, which would say the
+     path does not exist when it does and only its kind is wrong.  */
+  struct stat64 described;
+
+  if (__bfs_stat_path (name, &described) == 0)
+    {
+      __set_errno (ENOTDIR);
+      return NULL;
+    }
 #endif
 
   return opendir_tail (__open_nocancel (name, opendir_oflags));

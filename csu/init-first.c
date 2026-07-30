@@ -26,6 +26,7 @@
 #include <sys/types.h>
 #include <libc-internal.h>
 
+#include <dl-minst-bundle.h>
 #include <ldsodefs.h>
 
 /* Remember the command line argument and environment contents for
@@ -61,6 +62,13 @@ _init_first (int argc, char **argv, char **envp)
   __libc_argc = argc;
   __libc_argv = argv;
   __environ = envp;
+
+#ifdef SHARED
+  /* What the artifact this process runs out of says the program should be told. Here because it is
+     the first point where there is an environment to change, and before any other object's
+     constructor because libc's runs first. Does nothing outside an artifact.  */
+  __minst_apply_environment ();
+#endif
 
 #ifndef SHARED
   /* First the initialization which normally would be done by the

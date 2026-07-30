@@ -44,6 +44,18 @@ find_needed (const char *name, struct link_map *map)
     if (_dl_name_match_p (name, map->l_searchlist.r_list[n]))
       return map->l_searchlist.r_list[n];
 
+  /* And the base namespace, for an object bound across the boundary.
+
+     This loader puts host code in a namespace of its own, so a bundled object dlopened against a
+     large host closure has DT_NEEDED entries whose maps are not in its own namespace list. Upstream
+     never sees that -- a dependency is always resolved within one namespace -- and the caller's
+     assertion says "should never happen" on exactly this. Not finding it here is what turned a
+     working cross-namespace binding into an abort.  */
+  if (map->l_ns != LM_ID_BASE)
+    for (tmap = GL(dl_ns)[LM_ID_BASE]._ns_loaded; tmap != NULL; tmap = tmap->l_next)
+      if (_dl_name_match_p (name, tmap))
+	return tmap;
+
   /* Should never happen.  */
   return NULL;
 }
@@ -201,6 +213,9 @@ _dl_check_map_versions (struct link_map *map, int verbose, int trace_mode)
 
 	  /* If NEEDED is NULL this means a dependency was not found
 	     and no stub entry was created.  This should never happen.  */
+	  if (needed == NULL)
+	    _dl_debug_printf ("minst: no map for needed %s of %s [%lu]\n",
+			      strtab + ent->vn_file, DSO_FILENAME (map->l_name), map->l_ns);
 	  assert (needed != NULL);
 
 	  /* Make sure this is no stub we created because of a missing

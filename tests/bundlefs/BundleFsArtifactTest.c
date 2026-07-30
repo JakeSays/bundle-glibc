@@ -111,6 +111,89 @@ static void Show(const char* output)
     }
 }
 
+/* The second artifact: a carried object whose DT_NEEDED reaches the machine, and a machine library
+   that reaches further.
+
+   Three shared objects and a chain between them. The leaf and the middle are built into the scratch
+   directory, so the artifact does not carry those names and the placement rule sends them next door.
+   The plugin is carried, names the middle, and is found by the payload at its path inside the image.
+
+   Nothing off the machine is required to build any of it. Depending on a real system library would
+   make the test's subject -- how deep the walk goes -- a property of whatever that library happened
+   to need on the machine running it.
+
+   RUNPATH rather than a search path in the environment: the loader resolves a host name using the
+   RUNPATH of the object that asked, which here is the carried plugin, and for the leaf it is the
+   middle library that asks. Both get one. */
+static void RunHostArtifact(const char* bundler, const char* source, const char* scratch,
+    const char* compiler)
+{
+    char output[65536];
+
+    Run(NULL, 0, "rm -rf %s/carried %s/hostlibs", scratch, scratch);
+    Run(NULL, 0, "mkdir -p %s/carried %s/hostlibs", scratch, scratch);
+
+    int leaf = Run(output, sizeof output,
+        "%s -O0 -g -shared -fPIC -Wl,-soname,libminst-host-leaf.so"
+        " -o %s/hostlibs/libminst-host-leaf.so %s/HostLeaf.c",
+        compiler, scratch, source);
+
+    int middle = Run(output, sizeof output,
+        "%s -O0 -g -shared -fPIC -Wl,-soname,libminst-host-middle.so"
+        " -o %s/hostlibs/libminst-host-middle.so %s/HostMiddle.c"
+        " -L%s/hostlibs -lminst-host-leaf -Wl,-rpath,%s/hostlibs",
+        compiler, scratch, source, scratch, scratch);
+
+    int plugin = Run(output, sizeof output,
+        "%s -O0 -g -shared -fPIC -Wl,-soname,libminst-carried-plugin.so"
+        " -o %s/carried/libminst-carried-plugin.so %s/CarriedPlugin.c"
+        " -L%s/hostlibs -lminst-host-middle -Wl,-rpath,%s/hostlibs",
+        compiler, scratch, source, scratch, scratch);
+
+    int payload = Run(output, sizeof output,
+        "%s -O0 -g -o %s/host-payload %s/HostPayload.c", compiler, scratch, source);
+
+    Check(leaf == 0 && middle == 0 && plugin == 0 && payload == 0,
+        "the host dependency chain and its payload compile");
+
+    if (leaf != 0 || middle != 0 || plugin != 0 || payload != 0)
+    {
+        Show(output);
+        return;
+    }
+
+    int artifact = Run(output, sizeof output,
+        "%s %s/host.xml -DBUILD=%s --output %s/host-artifact",
+        bundler, source, scratch, scratch);
+
+    Check(artifact == 0, "an unsealed artifact builds, carrying the plugin and not its dependencies");
+
+    if (artifact != 0)
+    {
+        Show(output);
+        return;
+    }
+
+    Run(NULL, 0, "chmod +x %s/host-artifact", scratch);
+
+    /* The plugin must be reachable only from inside, and its dependencies only from outside. Either
+       one failing the other way would let the artifact pass while proving nothing about the fence. */
+    int carried_outside = Run(NULL, 0, "test -e /minst/lib/libminst-carried-plugin.so");
+    Check(carried_outside != 0, "the carried plugin does not exist on this machine");
+
+    int host_present = Run(NULL, 0, "test -e %s/hostlibs/libminst-host-leaf.so", scratch);
+    Check(host_present == 0, "and the host libraries it reaches are on the machine, not in the image");
+
+    int ran = Run(output, sizeof output, "%s/host-artifact", scratch);
+
+    Check(ran == 0, "the unsealed artifact runs and every check inside it passes");
+
+    if (ran != 0 || strstr(output, "FAIL") != NULL)
+    {
+        Show(output);
+    }
+}
+
 /* The member set an artifact carries: every shared object the staged tree installed, the converters
    beside them. Assembled rather than pointed at, because the bundler wants one directory and an
    install has them spread across lib64 and usr/lib64. */
@@ -232,7 +315,16 @@ int main(int argc, char** argv)
     int present = Run(NULL, 0, "test -e /minst/carried.txt");
     Check(present != 0, "the carried paths do not exist on this machine");
 
-    int ran = Run(output, sizeof output, "%s/artifact %s", scratch, scratch);
+    /* What the machine says before the artifact says anything, so the payload can tell what the
+       manifest did from what was already there: one variable for overwrite="false" to leave alone,
+       one for a plain set to replace, one for unset to remove, and four lists for the list forms to
+       act on. Passed on the command that starts it rather than set here, since Run goes through a
+       shell and this keeps the two statements in one place. */
+    int ran = Run(output, sizeof output,
+        "MINST_TEST_EXISTING=machine MINST_TEST_REPLACED=machine MINST_TEST_UNSET=machine"
+        " MINST_TEST_LIST=/middle:/kept:/last MINST_TEST_EMPTIED=/only"
+        " MINST_TEST_KEEP=/a:/b:/c MINST_TEST_ADD=/a:/b"
+        " %s/artifact %s", scratch, scratch);
 
     Check(ran == 0, "the artifact runs and every check inside it passes");
 
@@ -257,6 +349,8 @@ int main(int argc, char** argv)
             printf("     %.*s\n", (int) (last - before), before + (*before == '\n' ? 1 : 0));
         }
     }
+
+    RunHostArtifact(bundler, source, scratch, compiler);
 
     if (failures != 0)
     {

@@ -12,6 +12,7 @@
  * sysd-syscalls has to be regenerated before it does.  */
 
 #include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <limits.h>
 #include <unistd.h>
 #include <sysdep.h>
@@ -28,6 +29,13 @@ readlinkat (int fd, const char *path, char *buffer, size_t length)
 
       if (carried >= 0)
 	return carried;
+
+      /* Carried, but not a link. EINVAL rather than the kernel's ENOENT -- see readlink.c.  */
+      if (__bfs_carries (resolved))
+	{
+	  __set_errno (EINVAL);
+	  return -1;
+	}
     }
 #endif
 

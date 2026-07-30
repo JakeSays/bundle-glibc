@@ -17,18 +17,36 @@
    <https://www.gnu.org/licenses/>.  */
 
 #include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 
 int
 __access (const char *file, int type)
 {
-  /* An image is readable and nothing else, so a question about writing or executing falls through and
-     gets the machine's answer -- which is no, there being nothing there.  */
+  /* An image cannot be written, so a question about writing falls through and gets the machine's
+     answer -- which is no, there being nothing there.
+     Executing is a different question and has to be answered from the image's own mode bits. For a
+     directory X_OK is whether it can be searched, and refusing that is how realpath came to fail on
+     every carried path: it walks the components asking exactly this, and a refusal here sent it to a
+     kernel that has never heard of them.  */
 #if IS_IN (libc)
-  if ((type & (W_OK | X_OK)) == 0 && __bfs_carries (file))
-    return 0;
+  if ((type & W_OK) == 0)
+    {
+      struct stat64 described;
+
+      if (__bfs_stat_path (file, &described) == 0)
+	{
+	  if ((type & X_OK) == 0
+	      || (described.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0)
+	    return 0;
+
+	  __set_errno (EACCES);
+	  return -1;
+	}
+    }
 #endif
 
 #ifdef __NR_access

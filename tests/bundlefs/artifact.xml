@@ -14,4 +14,36 @@
 
     <libc-dependency path="$(BUILD)/runtime.bundle"/>
 
+    <!-- One of each action, arranged so the payload can tell each apart from the others and from
+         doing nothing. The driver sets the MINST_TEST_ variables the machine is meant to have said
+         first, which is what the overwrite and list cases are answering about. -->
+    <environment>
+        <set name="MINST_TEST_SET" value="carried"/>
+
+        <!-- The machine said this one first, and these two say so differently. -->
+        <set name="MINST_TEST_EXISTING" value="carried" overwrite="false"/>
+        <set name="MINST_TEST_REPLACED" value="carried"/>
+
+        <unset name="MINST_TEST_UNSET"/>
+
+        <list-prepend name="MINST_TEST_LIST" value="/front"/>
+        <list-append name="MINST_TEST_LIST" value="/back"/>
+        <list-remove name="MINST_TEST_LIST" value="/middle"/>
+
+        <!-- Already in the list the machine supplied, so it moves rather than appearing twice. -->
+        <list-prepend name="MINST_TEST_LIST" value="/last"/>
+
+        <!-- The same entry, declining to move it. The list is otherwise untouched. -->
+        <list-prepend name="MINST_TEST_KEEP" value="/c" overwrite="false"/>
+
+        <!-- And not there at all, so it is still added. -->
+        <list-prepend name="MINST_TEST_ADD" value="/new" overwrite="false"/>
+
+        <!-- Nothing there to add to, so no stray separator at either end. -->
+        <list-append name="MINST_TEST_FRESH" value="/only"/>
+
+        <!-- The one entry there is, so the variable goes rather than being left empty. -->
+        <list-remove name="MINST_TEST_EMPTIED" value="/only"/>
+    </environment>
+
 </bundle>

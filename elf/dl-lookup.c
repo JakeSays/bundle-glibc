@@ -394,6 +394,27 @@ do_lookup_x (const char *undef_name, unsigned int new_hash,
       if (map->l_nbuckets == 0)
 	continue;
 
+      /* Anything in this scope that is not a link_map.
+	 l_real names the object a map stands for: it is the map itself unless the map is a proxy, and
+	 nothing else is possible for a map that was built. A scope entry failing that is not an
+	 object at all -- here it has been freed and the memory handed to something that wrote strings
+	 into it -- and walking it reads a symbol table at whatever the rubbish says.
+	 Skipped and reported rather than dereferenced, so the fault names the scope that contains it
+	 instead of arriving as a null read at offset eight.  */
+      if (__glibc_unlikely (!map->l_proxy && map->l_real != map))
+	{
+	  /* %x and %s only: the loader's own printf has no %p, and asking for one aborts inside the
+	     diagnostic rather than reporting what it was called to report.  */
+	  _dl_debug_printf ("minst: scope of %s [%lu] holds a stale entry at %lx"
+			    " (real %lx, ns %lu, buckets %x) while resolving %s\n",
+			    undef_map != NULL ? DSO_FILENAME (undef_map->l_name) : "?",
+			    undef_map != NULL ? undef_map->l_ns : 0,
+			    (unsigned long int) (uintptr_t) map,
+			    (unsigned long int) (uintptr_t) map->l_real, map->l_ns,
+			    (unsigned int) map->l_nbuckets, undef_name);
+	  continue;
+	}
+
       Elf_Symndx symidx;
       int num_versions = 0;
       const ElfW(Sym) *versioned_sym = NULL;
@@ -872,15 +893,33 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
   if (__glibc_unlikely (current_value.m->l_real->l_type == lt_loaded)
       /* Don't do this for explicit lookups as opposed to implicit
 	 runtime lookups.  */
-      && (flags & DL_LOOKUP_ADD_DEPENDENCY) != 0
+      && (flags & DL_LOOKUP_ADD_DEPENDENCY) != 0)
+    {
+      /* A relocation dependency can only be recorded inside one namespace.
+	 add_dependency looks for the definition by walking undef_map's namespace list, so a
+	 definition living in another namespace is never found there and it fails -- and the retry
+	 below finds the same definition again and fails identically. That is an unbounded recursion
+	 rather than a search, and it ends as an eight-megabyte stack and a fault on the first push
+	 of _dl_lookup_symbol_x.
+
+	 It is reachable here because this loader puts host code in a namespace of its own: a bundled
+	 object dlopened against a large host closure binds across the boundary, and the proxy above
+	 covers only what it can find a proxy for.
+
+	 Marking the definition NODELETE is what add_dependency itself falls back to when it cannot
+	 record a reference for other reasons, and it buys the same thing the reference would have:
+	 the definition outlives everything referring to it.  */
+      if (__glibc_unlikely (current_value.m->l_ns != undef_map->l_ns))
+	mark_nodelete (current_value.m, flags);
       /* Add UNDEF_MAP to the dependencies.  */
-      && add_dependency (undef_map, current_value.m, flags) < 0)
-      /* Something went wrong.  Perhaps the object we tried to reference
-	 was just removed.  Try finding another definition.  */
-      return _dl_lookup_symbol_x (undef_name, undef_map, ref,
-				  (flags & DL_LOOKUP_GSCOPE_LOCK)
-				  ? undef_map->l_scope : symbol_scope,
-				  version, type_class, flags, skip_map);
+      else if (add_dependency (undef_map, current_value.m, flags) < 0)
+	/* Something went wrong.  Perhaps the object we tried to reference
+	   was just removed.  Try finding another definition.  */
+	return _dl_lookup_symbol_x (undef_name, undef_map, ref,
+				    (flags & DL_LOOKUP_GSCOPE_LOCK)
+				    ? undef_map->l_scope : symbol_scope,
+				    version, type_class, flags, skip_map);
+    }
 
   /* The object is used.  */
   if (__glibc_unlikely (current_value.m->l_real->l_used == 0))

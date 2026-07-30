@@ -621,6 +621,16 @@ dl_open_worker_begin (void *a)
       args->want_proxy = true;
       args->placed_in_host = true;
       args->libc_already_loaded = GL(dl_ns)[args->nsid].libc_map != NULL;
+
+      /* And ask again whether it is already loaded, because the namespace just changed.
+	 _dl_open asked before the worker ran, against the namespace the caller named -- which is not
+	 where this is going. Without a second look the name is searched for on the machine as though
+	 nothing had it, and an object sitting in the host namespace is opened a second time: two
+	 copies of one library, each with its own data, and callers bound to whichever they reached
+	 through. It cannot be folded into the first lookup, because which namespace to ask is what
+	 this branch has just decided.  */
+      if (args->map == NULL)
+	args->map = _dl_lookup_map (args->nsid, file);
     }
 #endif
 
@@ -767,6 +777,25 @@ dl_open_worker_begin (void *a)
 		       args->dl_mode & (__RTLD_DLOPEN | RTLD_DEEPBIND |
 					__RTLD_AUDIT | RTLD_ISOLATE));
 
+#ifdef SHARED
+  /* What the walk above put next door still has no closure of its own.
+     What it saw for a host library is the proxy left in this namespace, and dl-deps.c does not expand
+     a proxy's DT_NEEDED -- rightly, since expanding them here would map them into the wrong namespace.
+     The object they belong to is where they have to be resolved, and until this runs that is nobody's
+     job: the fence maps a host library and returns, and nothing walks what it needs.
+
+     One level deep is exactly how far the old arrangement got. A carried object naming a host library
+     got that library and not what the library itself named, and the first thing to notice was the
+     version check below, which asserts rather than reports on a DT_NEEDED with no map. Qt's GTK
+     platform theme is the case that found it: libqgtk3 is carried, names libpango, and libpango names
+     libthai.
+
+     The same pass startup runs, and for the same reason -- it also builds the version tables of what
+     it loads and refreshes the shared scope, both of which have to happen before the object is
+     relocated.  */
+  _dl_minst_finish_host_namespace ();
+#endif
+
   /* So far, so good.  Now check the versions.  */
   for (unsigned int i = 0; i < new->l_searchlist.r_nlist; ++i)
     if (new->l_searchlist.r_list[i]->l_real->l_versions == NULL)
@@ -783,15 +812,11 @@ dl_open_worker_begin (void *a)
 #endif
       }
 
-#ifdef SHARED
-  /* Anything that landed in the host namespace joins its shared scope, before relocation rather than
-     after: what is about to be relocated resolves against that scope, and a driver chosen at run
-     time arrives exactly this way.  GLVND asks the display which vendor drives it and opens that
-     library, so nothing named it until now, and it has to be visible to the host code that will call
-     into it rather than only to itself.  */
-  if (__glibc_unlikely (args->nsid == _dl_minst_host_namespace_id ()))
-    _dl_minst_host_scope_update ();
-#endif
+  /* The shared scope was refreshed by the pass above, which is where it has to happen: what is about
+     to be relocated resolves against that scope, and a driver chosen at run time arrives exactly this
+     way.  GLVND asks the display which vendor drives it and opens that library, so nothing named it
+     until now, and it has to be visible to the host code that will call into it rather than only to
+     itself.  */
 
   _dl_open_check (new, mode);
 
@@ -839,6 +864,24 @@ dl_open_worker_begin (void *a)
      structure.  */
   bool any_tls = resize_tls_slotinfo (new);
 
+#ifdef SHARED
+  /* And the thread-local storage of what went next door, which the sizing above cannot see: it walks
+     new's searchlist, where a host library appears as the proxy standing for it, and a proxy has no
+     storage of its own to notice.
+
+     Before update_tls_slotinfo rather than after, so that the generation bump inside it covers these
+     entries too. _dl_add_to_slotinfo stamps an entry with the generation after the current one, and
+     _dl_allocate_tls_init refuses to see a slot newer than the generation -- so registering these
+     afterwards is an assertion the first time a thread sets up its storage. That is what happened.
+
+     The result matters as well as the order: a dlopen whose own objects have no thread-local storage
+     does not run update_tls_slotinfo at all, and a host object that has some would then be registered
+     with nothing to move the generation.  */
+  bool host_tls = _dl_minst_host_tls ();
+#else
+  bool host_tls = false;
+#endif
+
   /* Perform the necessary allocations for adding new global objects
      to the global scope below.  */
   if (args->dl_mode & RTLD_GLOBAL)
@@ -851,10 +894,21 @@ dl_open_worker_begin (void *a)
      for a just-loaded module would index into an unallocated DTV slot
      and crash.  If relocation later fails, the subsequent _dl_close_worker
      cleans up these slotinfo entries via remove_slotinfo.  */
-  if (any_tls)
+  if (any_tls || host_tls)
     /* FIXME: This calls _dl_update_slotinfo, which aborts the process
        on memory allocation failure.  See bug 16134.  */
     update_tls_slotinfo (new);
+
+#ifdef SHARED
+  /* Relocating what went next door, which the loop below cannot reach for the same reason the sizing
+     above could not: it walks new's initfini, and an object the fence pulled in behind a host library
+     is in nobody's list here.
+
+     Unrelocated is how that shows -- the object is loaded, listed as somebody's dependency, and then
+     _dl_init reaches it and asserts on l_relocated. After the thread-local storage above, because an
+     IFUNC resolver fired during relocation reads it.  */
+  _dl_minst_relocate_host_namespace ();
+#endif
 
   /* Perform relocation.  This can trigger lazy binding in IFUNC
      resolvers.  For NODELETE mappings, these dependencies are not
@@ -1134,6 +1188,11 @@ no more namespaces available for dlmopen()"));
 	     the flag here.  */
 	}
 
+      /* The path a driver takes when it probes for a library it can do without, and the one that
+	 reaches no check below -- the reraise is a longjmp past everything after it. Whatever the
+	 cleanup above left behind is what the next dlopen walks.  */
+      _dl_minst_check_scopes ("after a failed dlopen");
+
       /* Release the lock.  */
       __rtld_lock_unlock_recursive (GL(dl_load_lock));
 
@@ -1144,6 +1203,11 @@ no more namespaces available for dlmopen()"));
   const int r_state __attribute__ ((unused))
     = _dl_debug_update (args.nsid)->r_state;
   assert (r_state == RT_CONSISTENT);
+
+  /* Every dlopen, so a list that goes bad can be pinned to the one that did it rather than to the
+     run as a whole. Still holding the load lock, which is what makes walking every namespace here
+     safe.  */
+  _dl_minst_check_scopes ("after dlopen");
 
   /* Release the lock.  */
   __rtld_lock_unlock_recursive (GL(dl_load_lock));

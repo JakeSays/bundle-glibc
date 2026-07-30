@@ -28,16 +28,29 @@
 int
 __faccessat (int fd, const char *file, int mode, int flag)
 {
-  /* An image is readable and nothing else. A program asking whether it may write to something the
-     artifact carries is asking about a file that cannot be written, so that falls through and gets
-     the machine's answer -- which is no, there being nothing there.  */
+  /* An image cannot be written, so a question about writing falls through and gets the machine's
+     answer -- which is no, there being nothing there.
+     Executing is a different question and is answered from the image's own mode bits. For a
+     directory X_OK is whether it can be searched, and refusing that is how realpath came to fail on
+     every carried path: it walks each component asking exactly this, and a refusal here sent it to a
+     kernel that has never heard of them. Qt then dropped every plugin path that would not
+     canonicalize, which arrived as an empty search list rather than as an error.  */
 #if IS_IN (libc)
-  if ((mode & (W_OK | X_OK)) == 0)
+  if ((mode & W_OK) == 0)
     {
       char resolved[PATH_MAX];
+      struct stat64 described;
 
-      if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved)) && __bfs_carries (resolved))
-	return 0;
+      if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved))
+	  && __bfs_stat_path (resolved, &described) == 0)
+	{
+	  if ((mode & X_OK) == 0
+	      || (described.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0)
+	    return 0;
+
+	  __set_errno (EACCES);
+	  return -1;
+	}
     }
 #endif
 

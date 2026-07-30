@@ -5,7 +5,7 @@
  */
 
 /* The program an artifact carries, exercising every path that libc routes through the bundle
- * filesystem.
+ * filesystem, and what the manifest says it should be told.
  *
  * Nothing here knows bundlefs exists. It calls open, read, mmap, dup and the rest, against paths no
  * machine has -- so an answer at all proves the artifact served it rather than the machine happening
@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/sendfile.h>
@@ -562,6 +563,51 @@ static void CheckReaderIsExported(void)
         && dlsym(RTLD_DEFAULT, "BfsDirectoryRead") != NULL, "  along with the rest of the surface");
 }
 
+/* What the manifest said the program should be told.
+ *
+ * The environment is the one thing an artifact cannot be given from outside without stopping being a
+ * unit, so every action the manifest surface offers is exercised here rather than only the one Qt
+ * needed. The driver sets MINST_TEST_EXISTING, MINST_TEST_LIST and MINST_TEST_EMPTIED before running
+ * this, which is what the overwrite and list-shape cases are answering about. */
+static void CheckEnvironment(void)
+{
+    const char* set = getenv("MINST_TEST_SET");
+    Check(set != NULL && strcmp(set, "carried") == 0, "the manifest sets a variable");
+
+    const char* existing = getenv("MINST_TEST_EXISTING");
+    Check(existing != NULL && strcmp(existing, "machine") == 0,
+        "  and overwrite=\"false\" leaves what the machine said");
+
+    const char* replaced = getenv("MINST_TEST_REPLACED");
+    Check(replaced != NULL && strcmp(replaced, "carried") == 0,
+        "  while a plain set replaces it");
+
+    Check(getenv("MINST_TEST_UNSET") == NULL, "unset removes a variable the machine supplied");
+
+    /* Prepended, appended, one entry removed, and an entry already present moved to the front rather
+       than repeated. */
+    const char* list = getenv("MINST_TEST_LIST");
+    Check(list != NULL && strcmp(list, "/last:/front:/kept:/back") == 0,
+        "the list forms prepend, append, remove and move without repeating");
+
+    /* overwrite="false" is about the entry, not the list: an entry already there keeps its place
+       instead of moving to the end the action names, and one that is not there is still added. */
+    const char* keep = getenv("MINST_TEST_KEEP");
+    Check(keep != NULL && strcmp(keep, "/a:/b:/c") == 0,
+        "  overwrite=\"false\" leaves an entry already in the list where it is");
+
+    const char* added = getenv("MINST_TEST_ADD");
+    Check(added != NULL && strcmp(added, "/new:/a:/b") == 0,
+        "  and still adds one that is not there");
+
+    const char* fresh = getenv("MINST_TEST_FRESH");
+    Check(fresh != NULL && strcmp(fresh, "/only") == 0,
+        "  appending to a variable that is not there leaves no stray separator");
+
+    Check(getenv("MINST_TEST_EMPTIED") == NULL,
+        "  and removing the last entry removes the variable");
+}
+
 int main(int argc, char** argv)
 {
     /* Somewhere on the machine to send a file to, which is the one case that has to leave the
@@ -580,6 +626,7 @@ int main(int argc, char** argv)
     CheckSendfile(scratch);
     CheckSealing();
     CheckReaderIsExported();
+    CheckEnvironment();
 
     printf("%d check(s), %d failure(s)\n", checks, failures);
 

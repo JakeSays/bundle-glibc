@@ -84,6 +84,10 @@ _dl_init (struct link_map *main_map, int argc, char **argv, char **env)
   ElfW(Dyn) *preinit_array_size = main_map->l_info[DT_PREINIT_ARRAYSZ];
   unsigned int i;
 
+  /* Before any initialiser runs, so that a list found broken later can be attributed to one of
+     them -- or to whatever they load -- rather than to setup.  */
+  _dl_minst_check_scopes ("entering _dl_init");
+
   if (__glibc_unlikely (GL(dl_initfirst) != NULL))
     {
       call_init (GL(dl_initfirst), argc, argv, env);
