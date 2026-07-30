@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 #include <not-cancel.h>
@@ -23,6 +24,14 @@
 ssize_t
 __read_nocancel (int fd, void *buf, size_t nbytes)
 {
+  /* The same consult read makes. This is the branch stdio takes for a stream marked
+     _IO_FLAGS2_NOTCANCEL, which is what glibc's own internal streams use -- so without it a bundled
+     path opened by one of those reads as an empty file.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    return __bfs_read (fd, buf, nbytes);
+#endif
+
   return INLINE_SYSCALL_CALL (read, fd, buf, nbytes);
 }
 hidden_def (__read_nocancel)

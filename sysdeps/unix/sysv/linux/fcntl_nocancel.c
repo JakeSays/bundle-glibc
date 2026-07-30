@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <errno.h>
@@ -49,6 +50,34 @@ hidden_def (__fcntl64_nocancel)
 int
 __fcntl64_nocancel_adjusted (int fd, int cmd, void *arg)
 {
+  /* Everything funnels through here, including __libc_fcntl64 -- so the table is consulted here
+     rather than there, and fdopendir sees the flags the caller opened with rather than the anonymous
+     file's. F_ADD_SEALS passes straight through, which matters: the seal on a new descriptor is set
+     by way of this function.  */
+#if IS_IN (libc)
+  if (cmd == F_GETFL && __bfs_owns (fd))
+    {
+      int flags = __bfs_flags (fd);
+
+      if (flags >= 0)
+	return flags;
+    }
+
+  if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC)
+    {
+      int copy = INLINE_SYSCALL_CALL (fcntl64, fd, cmd, (void *) arg);
+
+      if (copy >= 0 && !__bfs_adopt (fd, copy))
+	{
+	  __close_nocancel (copy);
+	  __set_errno (ENOMEM);
+	  return -1;
+	}
+
+      return copy;
+    }
+#endif
+
   if (cmd == F_GETOWN)
     {
       struct f_owner_ex fex;

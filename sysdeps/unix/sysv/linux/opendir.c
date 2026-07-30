@@ -15,6 +15,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -94,6 +95,14 @@ __opendir (const char *name)
 {
   if (__glibc_unlikely (invalid_name (name)))
     return NULL;
+
+  /* A directory the artifact carries, whose descriptor holds no entries: getdents64 reads them out of
+     the image when something asks. Weakly referenced, for the reason read.c gives.  */
+#if IS_IN (libc)
+  int carried = __bfs_opendir_fd (name);
+  if (carried >= 0)
+    return opendir_tail (carried);
+#endif
 
   return opendir_tail (__open_nocancel (name, opendir_oflags));
 }

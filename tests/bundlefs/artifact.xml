@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- The artifact the bundle filesystem test runs: a program, a file, and a directory tree, all at
+     paths no machine has. -->
+
+<bundle type="main" name="bundlefs-payload" version="1">
+
+    <program path="$(BUILD)/payload"/>
+
+    <contents>
+        <file from="$(SOURCE)/carried.txt" mount-point="/minst/carried.txt"/>
+        <directory from="$(SOURCE)/assets" mount-point="/minst/tree"/>
+    </contents>
+
+    <libc-dependency path="$(BUILD)/runtime.bundle"/>
+
+</bundle>

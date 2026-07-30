@@ -18,6 +18,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <bundlefs-descriptors.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sysdep-cancel.h>
@@ -37,6 +38,17 @@ __libc_open64 (const char *file, int oflag, ...)
       mode = va_arg (arg, int);
       va_end (arg);
     }
+
+  /* The artifact first, and the machine when it carries nothing there. A bundled path has to win:
+     the point of mounting one is that the program opens what it was built against rather than
+     whatever the machine happens to have at the same name.
+
+     Weakly referenced, for the reason read.c gives.  */
+#if IS_IN (libc)
+  int carried = __bfs_open_path (file, oflag);
+  if (carried >= 0)
+    return carried;
+#endif
 
   return SYSCALL_CANCEL (openat, AT_FDCWD, file, oflag | O_LARGEFILE,
 			 mode);

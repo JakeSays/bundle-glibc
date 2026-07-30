@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- The glibc built from this tree, as a runtime bundle.
+     No provenance block: this describes whatever was just compiled here, not a captured release. -->
+
+<bundle type="runtime" name="glibc" version="2.44">
+
+    <contents>
+        <!-- Every shared object, the loader among them. Found by soname rather than by path, so
+             where they land is the bundler's business and "at" only keeps them together. -->
+        <directory from="$(MEMBERS)" glob="*.so*" at="lib"/>
+
+        <!-- Opened by path rather than resolved, so these are mounted where the code that reads
+             them was compiled to look. -->
+        <directory from="$(MEMBERS)/gconv" mount-point="/usr/lib/x86_64-linux-gnu/gconv"/>
+    </contents>
+
+    <loader soname="ld-linux-x86-64.so.2"/>
+
+</bundle>

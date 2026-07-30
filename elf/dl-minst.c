@@ -24,6 +24,7 @@
 #include <ldsodefs.h>
 #include <link.h>
 #include <minst/minst_bundle.h>
+#include <minst/minst_view.h>
 #include <not-cancel.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -34,19 +35,20 @@
    table.  */
 #define MAX_PHDRS 64
 
-/* An artifact carries at most one bundle of each kind.  */
-#define MAX_BUNDLES 2
-
-struct minst_bundle
-{
-  const struct minst_bundle_header *header;
-  const struct minst_bundle_entry *entries;
-  const char *strings;
-};
-
 static int minst_fd = -1;
-static struct minst_bundle minst_bundles[MAX_BUNDLES];
-static size_t minst_nbundles;
+
+/* The view note, which says where everything is.
+ *
+ * It replaces the member index above.  Both are read because the bundler can still write either, and
+ * an artifact built by whichever end has to start; the index goes when nothing writes one.
+ *
+ * What it buys is that a member is a file inside an image rather than a section of its own, and this
+ * loader cannot read that filesystem.  bundlefs comes up inside __libc_early_init, which cannot run
+ * until libc is mapped, which is this.  So every object's extent is recorded here and the loader maps
+ * an offset exactly as it did before.  */
+static const struct minst_view_header *minst_note;
+static const struct minst_view_soname *minst_note_sonames;
+static const char *minst_note_strings;
 
 /* Stage zero's dynamic array, which exists only to carry DT_DEBUG.  Its address is taken straight
    from the program header because stage zero is not position independent, so what it was linked at
@@ -67,28 +69,59 @@ _dl_minst_fd (void)
    an artifact with nothing to serve, which is what it is.  */
 static struct minst_bundle_view minst_view;
 
+/* One per mount rather than one per image: what libc does with these is call
+   BfsFileSystemMount, which wants an image and the pair of paths, and an image mounted twice is two
+   mounts of one image.  Deeper than any manifest anyone means to write, and a fixed count so nothing
+   here allocates -- this runs before libc has a heap.  */
+#define MAX_MOUNTS 64
+
+static struct minst_bundle_image minst_mounts[MAX_MOUNTS];
+
 const struct minst_bundle_view *
 _dl_minst_bundle_view (void)
 {
-  if (minst_fd < 0)
+  if (minst_fd < 0 || minst_note == NULL)
     return NULL;
 
   minst_view.descriptor = minst_fd;
+
+  if (minst_view.images == NULL)
+    {
+      const struct minst_view_image *images
+	= (const void *) ((const unsigned char *) minst_note + minst_note->image_offset);
+      const struct minst_view_mount *mounts
+	= (const void *) ((const unsigned char *) minst_note + minst_note->mount_offset);
+
+      uint32_t taken = 0;
+
+      for (uint32_t i = 0; i < minst_note->mount_count && taken < MAX_MOUNTS; ++i)
+	{
+	  if (mounts[i].image >= minst_note->image_count)
+	    continue;
+
+	  const struct minst_view_image *image = &images[mounts[i].image];
+
+	  minst_mounts[taken].offset = image->offset;
+	  minst_mounts[taken].length = image->size;
+	  minst_mounts[taken].mount_point = minst_note_strings + mounts[i].mount_point;
+	  minst_mounts[taken].image_path = minst_note_strings + mounts[i].image_path;
+	  ++taken;
+	}
+
+      minst_view.images = minst_mounts;
+      minst_view.image_count = taken;
+    }
 
   return &minst_view;
 }
 rtld_hidden_def (_dl_minst_bundle_view)
 
-/* Taken from the payload bundle, which is the one describing the artifact rather than the runtime
-   inside it.  Zero when there is no artifact, so a loader running outside one behaves as it did.  */
+/* What the artifact may do.  Zero when there is no artifact, so a loader running outside one behaves
+   as it did.  */
 static uint32_t
 minst_flags (void)
 {
-  for (size_t b = 0; b < minst_nbundles; ++b)
-    if (minst_bundles[b].header->type == MINST_BUNDLE_MAIN)
-      return minst_bundles[b].header->flags;
-
-  return 0;
+  return minst_note != NULL ? minst_note->flags : 0;
 }
 
 bool
@@ -112,28 +145,23 @@ _dl_minst_trace (void)
 bool
 _dl_minst_runtime_library (uint32_t index, const char **name)
 {
+  if (minst_note == NULL)
+    return false;
+
   uint32_t seen = 0;
 
-  for (size_t b = 0; b < minst_nbundles; ++b)
+  for (uint32_t i = 0; i < minst_note->soname_count; ++i)
     {
-      const struct minst_bundle *bundle = &minst_bundles[b];
-      if (bundle->header->type != MINST_BUNDLE_RUNTIME)
+      const struct minst_view_soname *entry = &minst_note_sonames[i];
+
+      if ((entry->flags & MINST_SONAME_PRELOAD) == 0)
 	continue;
 
-      for (uint32_t i = 0; i < bundle->header->count; ++i)
-	{
-	  const struct minst_bundle_entry *entry = &bundle->entries[i];
-	  const char *member = bundle->strings + entry->name;
+      if (seen++ != index)
+	continue;
 
-	  if ((entry->flags & MINST_ENTRY_PRELOAD) == 0)
-	    continue;
-
-	  if (seen++ != index)
-	    continue;
-
-	  *name = member;
-	  return true;
-	}
+      *name = minst_note_strings + entry->name;
+      return true;
     }
 
   return false;
@@ -148,26 +176,25 @@ read_exactly (void *destination, size_t length, off_t offset)
   return got >= 0 && (size_t) got == length;
 }
 
-/* What has to be true before an index can be walked.  A malformed one is treated as not being ours
-   rather than as an error: another note of the same number could belong to anyone, and only the
-   owner and these bounds together say it is a bundle.  */
+/* What has to be true before the view can be walked.  Another note of the same number could belong to
+   anyone, so the owner and these together are what say it is ours, and every count is checked against
+   the space actually there.  */
 static bool
-bundle_is_sound (const struct minst_bundle_header *header, uint32_t descsz)
+view_is_sound (const struct minst_view_header *header, uint32_t descsz)
 {
   if (descsz < sizeof (*header))
     return false;
-  if (header->magic != MINST_BUNDLE_MAGIC)
+  if (header->magic != MINST_VIEW_MAGIC)
     return false;
-  if (header->version != MINST_BUNDLE_VERSION)
+  if (header->version != MINST_VIEW_VERSION)
     return false;
-  if (header->libc != MINST_LIBC_GLIBC)
+  if (header->string_offset > descsz
+      || header->string_size > descsz - header->string_offset)
     return false;
-  if (header->type != MINST_BUNDLE_MAIN && header->type != MINST_BUNDLE_RUNTIME)
+  if (header->soname_offset > descsz)
     return false;
-  if (header->strings < sizeof (*header) || header->strings > descsz)
-    return false;
-  if (header->count
-      > (header->strings - sizeof (*header)) / sizeof (struct minst_bundle_entry))
+  if (header->soname_count
+      > (descsz - header->soname_offset) / sizeof (struct minst_view_soname))
     return false;
   return true;
 }
@@ -187,24 +214,22 @@ scan_notes (const unsigned char *cursor, const unsigned char *end)
       if (cursor > end)
 	return;
 
-      if (note->n_type != MINST_BUNDLE_NOTE_TYPE)
-	continue;
       if (note->n_namesz != sizeof MINST_BUNDLE_OWNER)
 	continue;
       if (memcmp (name, MINST_BUNDLE_OWNER, note->n_namesz) != 0)
 	continue;
 
-      const struct minst_bundle_header *header = (const void *) desc;
-      if (!bundle_is_sound (header, note->n_descsz))
+      if (note->n_type != MINST_VIEW_NOTE_TYPE)
 	continue;
 
-      if (minst_nbundles == MAX_BUNDLES)
-	return;
+      const struct minst_view_header *view = (const void *) desc;
+      if (minst_note != NULL || !view_is_sound (view, note->n_descsz))
+	continue;
 
-      struct minst_bundle *bundle = &minst_bundles[minst_nbundles++];
-      bundle->header = header;
-      bundle->entries = (const void *) (header + 1);
-      bundle->strings = (const char *) header + header->strings;
+      minst_note = view;
+      minst_note_sonames
+	= (const void *) ((const unsigned char *) view + view->soname_offset);
+      minst_note_strings = (const char *) view + view->string_offset;
     }
 }
 
@@ -256,14 +281,14 @@ read_bundles (void)
       scan_notes (notes, notes + phdrs[i].p_filesz);
     }
 
-  return minst_nbundles != 0;
+  return minst_note != NULL;
 }
 
 bool
 _dl_minst_open (const char *execfn)
 {
   if (minst_fd != -1)
-    return minst_nbundles != 0;
+    return minst_note != NULL;
 
   if (execfn != NULL)
     minst_fd = __open_nocancel (execfn, O_RDONLY | O_CLOEXEC);
@@ -314,30 +339,36 @@ names_member (const char *asked, const char *carried)
 bool
 _dl_minst_find (const char *name, struct minst_member *member)
 {
-  for (size_t b = 0; b < minst_nbundles; ++b)
+  if (minst_note != NULL)
     {
-      const struct minst_bundle *bundle = &minst_bundles[b];
-
-      for (uint32_t i = 0; i < bundle->header->count; ++i)
+      for (uint32_t i = 0; i < minst_note->soname_count; ++i)
 	{
-	  const struct minst_bundle_entry *entry = &bundle->entries[i];
+	  const struct minst_view_soname *entry = &minst_note_sonames[i];
 
-	  /* The starting member of a bundle is what that bundle exists to run -- the program in the
-	     payload, the loader in the runtime -- and neither is something a DT_NEEDED asks for.
-
-	     The loader matters most.  libc.so.6 names it in DT_NEEDED, and that reference has to bind
-	     to the loader already running rather than map a second copy of it out of the artifact.  */
-	  if ((entry->flags & MINST_ENTRY_MAIN) != 0)
+	  /* Nothing to map, which is a compressed object: it has no contiguous layout, and this
+	     loader has nothing to decompress it with.  Passed over rather than failed here, so the
+	     complaint comes from whatever actually wanted it.  */
+	  if (entry->size == 0)
 	    continue;
 
-	  if (!names_member (name, bundle->strings + entry->name))
+	  /* The machine's copy is the one to use, so this is not a member to map at all.  */
+	  if ((entry->flags & MINST_SONAME_HOST) != 0)
+	    continue;
+
+	  if (!names_member (name, minst_note_strings + entry->name))
 	    continue;
 
 	  member->offset = entry->offset;
 	  member->size = entry->size;
-	  member->unique = (bundle->header->type == MINST_BUNDLE_RUNTIME);
+
+	  /* There may be only one of anything a referenced unit supplies.  Image zero is what this
+	     artifact was built from; anything else arrived as a unit, and a libc is what that means in
+	     practice -- which is the same thing the runtime bundle said before.  */
+	  member->unique = (entry->image != 0);
 	  return true;
 	}
+
+      return false;
     }
 
   return false;
@@ -410,25 +441,12 @@ failed:
 bool
 _dl_minst_main (struct minst_member *member)
 {
-  for (size_t b = 0; b < minst_nbundles; ++b)
-    {
-      const struct minst_bundle *bundle = &minst_bundles[b];
-      if (bundle->header->type != MINST_BUNDLE_MAIN)
-	continue;
+  if (minst_note == NULL || minst_note->program_size == 0)
+    return false;
 
-      for (uint32_t i = 0; i < bundle->header->count; ++i)
-	{
-	  const struct minst_bundle_entry *entry = &bundle->entries[i];
-	  if ((entry->flags & MINST_ENTRY_MAIN) == 0)
-	    continue;
-
-	  member->offset = entry->offset;
-	  member->size = entry->size;
-	  /* The program, which is loaded once into the base namespace and is nothing's dependency.  */
-	  member->unique = false;
-	  return true;
-	}
-    }
-
-  return false;
+  member->offset = minst_note->program_offset;
+  member->size = minst_note->program_size;
+  /* The program, which is loaded once into the base namespace and is nothing's dependency.  */
+  member->unique = false;
+  return true;
 }

@@ -16,6 +16,7 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
@@ -23,6 +24,13 @@
 int
 __access (const char *file, int type)
 {
+  /* An image is readable and nothing else, so a question about writing or executing falls through and
+     gets the machine's answer -- which is no, there being nothing there.  */
+#if IS_IN (libc)
+  if ((type & (W_OK | X_OK)) == 0 && __bfs_carries (file))
+    return 0;
+#endif
+
 #ifdef __NR_access
   return INLINE_SYSCALL_CALL (access, file, type);
 #else

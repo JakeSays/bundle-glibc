@@ -18,11 +18,13 @@
 
 #define fcntl __no_decl_fcntl
 #define __fcntl __no_decl___fcntl
+#include <bundlefs-descriptors.h>
 #include <fcntl.h>
 #undef fcntl
 #undef __fcntl
 #include <stdarg.h>
 #include <errno.h>
+#include <not-cancel.h>
 #include <sysdep-cancel.h>
 
 #ifndef __NR_fcntl64
@@ -45,6 +47,9 @@ __libc_fcntl64 (int fd, int cmd, ...)
 
   cmd = FCNTL_ADJUST_CMD (cmd);
 
+  /* F_GETFL and the duplications are answered in __fcntl64_nocancel_adjusted, which this and every
+     other caller funnel through. Only the lock commands below bypass it, and none of them is about
+     the file the table knows.  */
   if (cmd == F_SETLKW || cmd == F_SETLKW64 || cmd == F_OFD_SETLKW)
     return SYSCALL_CANCEL (fcntl64, fd, cmd, arg);
 

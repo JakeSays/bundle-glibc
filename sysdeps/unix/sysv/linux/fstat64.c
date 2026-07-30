@@ -18,6 +18,7 @@
 
 #define __fstat __redirect___fstat
 #define fstat   __redirect_fstat
+#include <bundlefs-descriptors.h>
 #include <sys/stat.h>
 #undef __fstat
 #undef fstat
@@ -28,6 +29,13 @@
 int
 __fstat64_time64 (int fd, struct __stat64_t64 *buf)
 {
+  /* The descriptor knows what it is; the kernel only knows it is an empty anonymous file. Without
+     this a carried directory looks like a regular one and opendir refuses it with ENOTDIR.  */
+#if IS_IN (libc) && __TIMESIZE == 64
+  if (__bfs_owns (fd))
+    return __bfs_fstat (fd, buf);
+#endif
+
 #if !FSTATAT_USE_STATX
 # if XSTAT_IS_XSTAT64
   /* The __NR_stat macro is defined for all ABIs that also define

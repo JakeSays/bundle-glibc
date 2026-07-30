@@ -15,6 +15,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <sys/uio.h>
 #include <sysdep-cancel.h>
 
@@ -23,6 +24,11 @@
 ssize_t
 preadv64 (int fd, const struct iovec *vector, int count, off64_t offset)
 {
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    return __bfs_preadv (fd, vector, count, offset);
+#endif
+
   return SYSCALL_CANCEL (preadv, fd, vector, count, LO_HI_LONG (offset));
 }
 #else

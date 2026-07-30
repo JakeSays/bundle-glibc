@@ -17,6 +17,7 @@
    <https://www.gnu.org/licenses/>.  */
 
 #include <string.h>
+#include <bundlefs-descriptors.h>
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
@@ -25,6 +26,13 @@
 ssize_t
 __getdents64 (int fd, void *buf, size_t nbytes)
 {
+  /* A carried directory's entries, written into this buffer as they are read out of the image.
+     Weakly referenced, for the reason read.c gives.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    return __bfs_getdents64 (fd, buf, nbytes);
+#endif
+
   /* The system call takes an unsigned int argument, and some length
      checks in the kernel use an int type.  */
   if (nbytes > INT_MAX)

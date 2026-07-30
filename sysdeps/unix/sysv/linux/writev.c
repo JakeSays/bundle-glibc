@@ -16,6 +16,8 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/uio.h>
 #include <sysdep-cancel.h>
@@ -23,6 +25,15 @@
 ssize_t
 __writev (int fd, const struct iovec *iov, int iovcnt)
 {
+  /* Opened read-only, so this is EBADF -- see bundlefs-descriptors.h.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    {
+      __set_errno (EBADF);
+      return -1;
+    }
+#endif
+
   return SYSCALL_CANCEL (writev, fd, iov, iovcnt);
 }
 libc_hidden_def (__writev)

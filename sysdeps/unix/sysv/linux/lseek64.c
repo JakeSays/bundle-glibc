@@ -16,6 +16,7 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -26,6 +27,13 @@
 off64_t
 __lseek64 (int fd, off64_t offset, int whence)
 {
+  /* The image knows where it is; the kernel does not, the descriptor holding no content. Weakly
+     referenced, for the reason read.c gives.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    return __bfs_lseek (fd, offset, whence);
+#endif
+
 #ifdef __NR_llseek
 # define __NR__llseek __NR_llseek
 #endif

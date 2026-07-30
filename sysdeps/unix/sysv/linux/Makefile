@@ -676,11 +676,26 @@ dl-routines += \
   dl-rseq-symbols \
   # dl-routines
 
+# The loader's own copies. dl-brk, dl-getcwd, dl-openat64, dl-opendir and dl-sbrk are upstream's; the
+# rest are here because libc routes them through the bundle filesystem and the loader must not, which
+# it cannot express any other way -- see dl-lseek64.c.
 sysdep-rtld-routines += \
+  dl-access \
   dl-brk \
+  dl-close_nocancel \
+  dl-close_nocancel_nostatus \
+  dl-dup \
+  dl-fcntl_nocancel \
+  dl-fstat64 \
+  dl-fstatat64 \
   dl-getcwd \
+  dl-getdents64 \
+  dl-lseek64 \
+  dl-mmap64 \
+  dl-open64_nocancel \
   dl-openat64 \
   dl-opendir \
+  dl-pread64_nocancel \
   dl-sbrk \
   # sysdep-rtld-routines
 

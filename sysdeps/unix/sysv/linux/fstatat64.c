@@ -18,8 +18,10 @@
 
 #define __fstatat __redirect___fstatat
 #define fstatat   __redirect_fstatat
+#include <bundlefs-descriptors.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <string.h>
 #include <sysdep.h>
 #include <time.h>
@@ -145,6 +147,27 @@ __fstatat64_time64 (int fd, const char *file, struct __stat64_t64 *buf,
 		    int flag)
 {
   int r;
+
+  /* What the artifact carries, when the path names something it does.  */
+#if IS_IN (libc) && __TIMESIZE == 64
+  /* An empty name with AT_EMPTY_PATH is fstat asking about the descriptor itself, which is how
+     __fstat64 and opendir_tail both arrive here. The descriptor knows what it is; the kernel only
+     knows it is an empty anonymous file, which is how a carried directory looked like a regular one
+     and opendir refused it.  */
+  if (file != NULL && file[0] == '\0' && (flag & AT_EMPTY_PATH) != 0)
+    {
+      if (__bfs_owns (fd) && __bfs_fstat (fd, buf) == 0)
+	return 0;
+    }
+  else
+    {
+      char resolved[PATH_MAX];
+
+      if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved))
+	  && __bfs_stat_path (resolved, buf) == 0)
+	return 0;
+    }
+#endif
 
 #if FSTATAT_USE_STATX
   r = fstatat64_time64_statx (fd, file, buf, flag);

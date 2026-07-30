@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 
@@ -23,6 +24,18 @@
 ssize_t
 __libc_read (int fd, void *buf, size_t nbytes)
 {
+  /* A descriptor on something the artifact carries is read out of the image where it lies. Nothing is
+     copied: the descriptor is a number the kernel gave out so it cannot collide, and the content
+     stays where it was built.
+
+     Weakly referenced, so this object linked into ld.so -- which happens, and for reasons that have
+     nothing to do with reading -- resolves to nothing and goes straight to the syscall. The loader has
+     no filesystem to ask, running before there is one.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    return __bfs_read (fd, buf, nbytes);
+#endif
+
   return SYSCALL_CANCEL (read, fd, buf, nbytes);
 }
 libc_hidden_def (__libc_read)

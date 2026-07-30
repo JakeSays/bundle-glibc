@@ -15,6 +15,8 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sysdep.h>
 
@@ -26,6 +28,15 @@
 int
 __ftruncate64 (int fd, off64_t length)
 {
+  /* Opened read-only, so this is EBADF -- see bundlefs-descriptors.h.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    {
+      __set_errno (EBADF);
+      return -1;
+    }
+#endif
+
   return INLINE_SYSCALL_CALL (ftruncate64, fd,
 			      __ALIGNMENT_ARG SYSCALL_LL64 (length));
 }

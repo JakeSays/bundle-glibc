@@ -15,6 +15,8 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 #include <shlib-compat.h>
@@ -22,6 +24,15 @@
 ssize_t
 __libc_pwrite64 (int fd, const void *buf, size_t count, off64_t offset)
 {
+  /* Opened read-only, so this is EBADF -- see bundlefs-descriptors.h.  */
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    {
+      __set_errno (EBADF);
+      return -1;
+    }
+#endif
+
   return SYSCALL_CANCEL (pwrite64, fd, buf, count, SYSCALL_LL64_PRW (offset));
 }
 

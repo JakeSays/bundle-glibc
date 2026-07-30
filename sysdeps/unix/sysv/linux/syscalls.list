@@ -77,7 +77,10 @@ chown		-	chown		i:sii	__libc_chown	__chown chown
 fchownat	-	fchownat	i:isiii	fchownat
 linkat		-	linkat		i:isisi	linkat
 mkdirat		-	mkdirat		i:isi	mkdirat
-readlinkat	-	readlinkat	i:issU	readlinkat
+# readlinkat is implemented in readlinkat.c beside this file, because a path relative to a bundled
+# directory has to be resolved before the syscall. The entry cannot simply stay here with the C file
+# added: make-syscalls.sh only lets a source in a directory of *higher* priority than the one holding
+# this list override an entry, so a file in this very directory is never consulted.
 symlinkat	-	symlinkat	i:sis	symlinkat
 unlinkat	-	unlinkat	i:isi	unlinkat
 
@@ -107,4 +110,7 @@ pkey_alloc	EXTRA	pkey_alloc	i:ii	__pkey_alloc	pkey_alloc
 pkey_free	EXTRA	pkey_free	i:i	__pkey_free	pkey_free
 gettid          EXTRA   gettid          Ei:     __gettid	gettid
 tgkill          EXTRA   tgkill          i:iii   __tgkill	tgkill
-close_range     -       close_range     i:iii   __close_range   close_range
+# close_range is implemented in close_range.c beside this file, because the kernel closes the whole
+# range without touching any libc entry point and the descriptor table has to be told. The entry
+# cannot stay here with the C file added: make-syscalls.sh only lets a source in a directory of
+# *higher* priority than the one holding this list override an entry.

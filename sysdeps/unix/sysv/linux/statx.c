@@ -16,7 +16,10 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <sysdep.h>
 #include "statx_generic.c"
@@ -25,6 +28,24 @@ int
 statx (int fd, const char *path, int flags,
        unsigned int mask, struct statx *buf)
 {
+  /* What the artifact carries, the same shapes fstatat answers: the descriptor itself when the name
+     is empty and AT_EMPTY_PATH is set, otherwise a path resolved against it.  */
+#if IS_IN (libc)
+  if (path != NULL && path[0] == '\0' && (flags & AT_EMPTY_PATH) != 0)
+    {
+      if (__bfs_owns (fd) && __bfs_statx_fd (fd, buf) == 0)
+	return 0;
+    }
+  else
+    {
+      char resolved[PATH_MAX];
+
+      if (__bfs_resolve_at (fd, path, resolved, sizeof (resolved))
+	  && __bfs_statx_path (resolved, buf) == 0)
+	return 0;
+    }
+#endif
+
   int ret = INLINE_SYSCALL_CALL (statx, fd, path, flags, mask, buf);
 #ifdef __ASSUME_STATX
   return ret;

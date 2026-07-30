@@ -1,0 +1,40 @@
+# Copyright (c) 2026, Jake Helfert
+#
+# SPDX-License-Identifier: MIT
+
+# The reader, exported so a program inside an artifact can call it directly.
+#
+# §6.1 of design/bundle-format.md is what this is for: an application does its bundled input and
+# output through this interface, and BfsProcessFileSystem hands back the path space libc already
+# brought up rather than making it build a second one over the same bytes. The same source linked
+# into a host-mode program presents the same names, so an application asks for the process filesystem
+# and opens its own only when there is none -- and works either way without knowing which it is in.
+#
+# Not a GLIBC_ node. These are not glibc's interface and do not follow its versioning: putting them
+# in one would say they were part of the C library's ABI, and they are ours. GLIBC_PRIVATE is the
+# precedent for a node outside the numbered chain, and is equally wrong here -- private says
+# "internal, may vanish", and this is the opposite.
+
+libc {
+  MINST_1.0 {
+    # An image inside a file, and the path space mounted over it.
+    BfsImageOpen; BfsImageClose;
+    BfsFileSystemCreate; BfsFileSystemDestroy;
+    BfsFileSystemMount; BfsFileSystemIsMounted;
+
+    # The one an artifact's payload wants: what libc already mounted.
+    BfsProcessFileSystem;
+
+    # Files.
+    BfsFileOpen; BfsFileClose;
+    BfsFileRead; BfsFileReadAt; BfsFileSeek;
+    BfsFileInformation; BfsFileMap; BfsFileExtent;
+
+    # Paths, answered without opening anything.
+    BfsFileSystemStat; BfsFileSystemReadLink;
+
+    # Directories.
+    BfsDirectoryOpen; BfsDirectoryClose;
+    BfsDirectoryRead; BfsDirectorySeek;
+  }
+}

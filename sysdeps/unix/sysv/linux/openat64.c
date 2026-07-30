@@ -16,7 +16,9 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 
 #include <sysdep-cancel.h>
@@ -35,6 +37,21 @@ __libc_openat64 (int fd, const char *file, int oflag, ...)
       mode = va_arg (arg, mode_t);
       va_end (arg);
     }
+
+  /* What the artifact carries, when the path names something it does. open64 does the same against
+     AT_FDCWD; this is the rest of it, since a path relative to a bundled directory has no meaning to
+     the kernel -- the number it holds is an anonymous file.  */
+#if IS_IN (libc)
+  char resolved[PATH_MAX];
+
+  if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved)))
+    {
+      int carried = __bfs_open_path (resolved, oflag);
+
+      if (carried >= 0)
+	return carried;
+    }
+#endif
 
   return SYSCALL_CANCEL (openat, fd, file, oflag | O_LARGEFILE, mode);
 }

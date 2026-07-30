@@ -16,7 +16,9 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -26,6 +28,19 @@
 int
 __faccessat (int fd, const char *file, int mode, int flag)
 {
+  /* An image is readable and nothing else. A program asking whether it may write to something the
+     artifact carries is asking about a file that cannot be written, so that falls through and gets
+     the machine's answer -- which is no, there being nothing there.  */
+#if IS_IN (libc)
+  if ((mode & (W_OK | X_OK)) == 0)
+    {
+      char resolved[PATH_MAX];
+
+      if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved)) && __bfs_carries (resolved))
+	return 0;
+    }
+#endif
+
   int ret = INLINE_SYSCALL_CALL (faccessat2, fd, file, mode, flag);
 #if __ASSUME_FACCESSAT2
   return ret;

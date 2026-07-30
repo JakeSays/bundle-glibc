@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <sys/uio.h>
 #include <sysdep-cancel.h>
@@ -23,6 +24,11 @@
 ssize_t
 __readv (int fd, const struct iovec *iov, int iovcnt)
 {
+#if IS_IN (libc)
+  if (__bfs_owns (fd))
+    return __bfs_readv (fd, iov, iovcnt);
+#endif
+
   return SYSCALL_CANCEL (readv, fd, iov, iovcnt);
 }
 libc_hidden_def (__readv)

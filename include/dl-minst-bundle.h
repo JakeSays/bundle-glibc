@@ -22,9 +22,8 @@
 
 /* Where one image sits inside the artifact, and where it shows through.
 
-   Not filled in yet: artifacts carry flat named members today, and nothing writes an image into one.
-   The shape is here because the boundary is easier to settle before there is data crossing it than
-   after.  */
+   One of these per mount rather than per image, because what libc does with them is mount each one:
+   an image mounted at two places is two of these naming the same bytes.  */
 struct minst_bundle_image
 {
   /* From the start of the artifact. */

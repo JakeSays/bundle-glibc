@@ -34,6 +34,7 @@ bundlefs-routines := \
 # Ours, and only meaningful inside a libc: what brings the reader up against the artifact the loader
 # opened, and what reads it without going through interposable names.
 libc-routines := \
+  BfsDescriptors \
   BfsProcess \
   # libc-routines
 
@@ -69,6 +70,7 @@ $(foreach r,$(bundlefs-routines),$(eval CFLAGS-$(r).c += $(erofs-cflags) -I$(bun
 # Ours needs the reader's public headers, and nothing of erofs: it talks to the library rather than
 # past it, which is the same boundary a payload sees.
 CFLAGS-BfsProcess.c += -I$(bundlefs-dir)/lib/include
+CFLAGS-BfsDescriptors.c += -I$(bundlefs-dir)/lib/include
 
 # erofs declares erofs_get_configure() with an empty parameter list, which in C means unspecified
 # rather than none. The declaration is in a header everything includes, so every source needs the

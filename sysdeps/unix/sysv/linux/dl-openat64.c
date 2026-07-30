@@ -28,3 +28,11 @@ openat64 (int dfd, const char *file, int oflag, ...)
 
   return INLINE_SYSCALL (openat, 3, dfd, file, oflag | O_LARGEFILE);
 }
+
+/* The loader calls this by its internal name, which this file did not define -- so the reference
+   reached libc's openat64.os instead, which was harmless until that object began consulting the
+   bundle filesystem. Taking it now would pull the descriptor table into ld.so, and malloc with it.
+
+   The loader has no use for the routing regardless: it opens the artifact itself and maps from the
+   extents recorded in the view note.  */
+strong_alias (openat64, __openat64)

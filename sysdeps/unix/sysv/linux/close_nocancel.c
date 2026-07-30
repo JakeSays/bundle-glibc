@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 #include <not-cancel.h>
@@ -23,6 +24,14 @@
 int
 __close_nocancel (int fd)
 {
+  /* The same pairing __close makes, and needed here as well: stdio and closedir come through this
+     one rather than through close, so without it a descriptor is let go by the kernel while its
+     file stays in the table -- and the next memfd_create is handed that number back with the old
+     file behind it.  */
+#if IS_IN (libc)
+  __bfs_forget (fd);
+#endif
+
   return INLINE_SYSCALL_CALL (close, fd);
 }
 libc_hidden_def (__close_nocancel)

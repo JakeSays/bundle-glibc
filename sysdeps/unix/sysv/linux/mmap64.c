@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -49,6 +50,17 @@ __mmap64 (void *addr, size_t len, int prot, int flags, int fd, off64_t offset)
 
   if (offset & MMAP_OFF_MASK)
     return (void *) INLINE_SYSCALL_ERROR_RETURN_VALUE (EINVAL);
+
+  /* A descriptor of ours holds no content, so mapping it would give a page of zeroes. The artifact is
+     mapped instead, at the offset the file's bytes lie at -- which is what keeps a bundled shared
+     object or asset as cheap to map as one on the machine.
+
+     Only when a descriptor is named: MAP_ANONYMOUS ignores fd, and the table says no to everything
+     else in a process that is not running out of an artifact.  */
+#if IS_IN (libc)
+  if ((flags & MAP_ANONYMOUS) == 0 && __bfs_owns (fd))
+    return __bfs_mmap (addr, len, prot, flags, fd, offset);
+#endif
 
   MMAP_PREPARE (addr, len, prot, flags, fd, offset);
 #ifdef __NR_mmap2

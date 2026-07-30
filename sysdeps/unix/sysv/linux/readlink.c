@@ -16,6 +16,7 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sysdep.h>
@@ -26,6 +27,15 @@
 ssize_t
 __readlink (const char *path, char *buf, size_t len)
 {
+  /* A link the artifact carries. The target is recorded in the image and is not followed here, which
+     is what readlink is for.  */
+#if IS_IN (libc)
+  ssize_t carried = __bfs_readlink_path (path, buf, len);
+
+  if (carried >= 0)
+    return carried;
+#endif
+
 #ifdef __NR_readlink
   return INLINE_SYSCALL_CALL (readlink, path, buf, len);
 #else

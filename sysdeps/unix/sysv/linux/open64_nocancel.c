@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -35,6 +36,15 @@ __open64_nocancel (const char *file, int oflag, ...)
       mode = va_arg (arg, int);
       va_end (arg);
     }
+
+  /* The same consult open makes. stdio comes through here for a stream marked
+     _IO_FLAGS2_NOTCANCEL, which is what glibc's own internal streams use.  */
+#if IS_IN (libc)
+  int carried = __bfs_open_path (file, oflag);
+
+  if (carried >= 0)
+    return carried;
+#endif
 
   return INLINE_SYSCALL_CALL (openat, AT_FDCWD, file, oflag | O_LARGEFILE,
 			      mode);

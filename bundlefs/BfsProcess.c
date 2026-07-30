@@ -15,23 +15,37 @@
 
 #include <dl-minst-bundle.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <not-cancel.h>
 #include <stddef.h>
 #include <sys/mman.h>
+#include <sysdep.h>
 
 /* The path space this process runs against, or NULL when it is not running out of an artifact.  */
 static BfsFileSystem *process_file_system;
 
-/* Reading and mapping through libc's internal names rather than the public ones.
+/* Reading and mapping the artifact by syscall, not through any libc entry point.
 
-   The public pread64 and mmap are interposable, and this reader is compiled into libc: without this
-   an LD_PRELOAD in the payload could interpose the reads libc makes of the artifact it is running
-   out of. glibc keeps interposition away from its own internal use the same way.  */
+   Two reasons, and the second is fatal rather than merely undesirable.
+
+   The public pread64 and mmap are interposable, and this reader is compiled into libc: going through
+   them would let an LD_PRELOAD in the payload interpose the reads libc makes of the artifact it is
+   running out of. glibc keeps interposition away from its own internal use the same way.
+
+   And every libc read entry point now consults the descriptor table -- including the internal
+   __pread64_nocancel this used to call. The reader is what the table is built on: BfsFileRead runs
+   with the table's lock held, and reaching a routed entry point from underneath it re-enters the
+   table and deadlocks on a lock the same thread already holds. That is not hypothetical; it hung
+   every artifact the moment pread64_nocancel was routed.
+
+   The descriptor here is the artifact's own, opened by the loader. It is never in the table, so
+   there is nothing the routing could usefully do even if it could safely run.  */
 
 static int64_t
 bfs_read_at (int descriptor, uint64_t offset, void *buffer, uint64_t length)
 {
-  ssize_t got = __pread64_nocancel (descriptor, buffer, length, offset);
+  long got = INLINE_SYSCALL_CALL (pread64, descriptor, buffer, length,
+				  SYSCALL_LL64_PRW ((off64_t) offset));
 
   return got < 0 ? -errno : got;
 }
@@ -39,12 +53,13 @@ bfs_read_at (int descriptor, uint64_t offset, void *buffer, uint64_t length)
 static int
 bfs_map (int descriptor, uint64_t offset, uint64_t length, const void **data)
 {
-  void *mapped = __mmap (NULL, length, PROT_READ, MAP_PRIVATE, descriptor, offset);
+  long mapped = INLINE_SYSCALL_CALL (mmap, NULL, length, PROT_READ, MAP_PRIVATE, descriptor,
+				     offset);
 
-  if (mapped == MAP_FAILED)
-    return -errno;
+  if (mapped < 0 && mapped > -4096)
+    return (int) mapped;
 
-  *data = mapped;
+  *data = (const void *) mapped;
 
   return 0;
 }
@@ -52,7 +67,7 @@ bfs_map (int descriptor, uint64_t offset, uint64_t length, const void **data)
 static void
 bfs_unmap (const void *data, uint64_t length)
 {
-  __munmap ((void *) data, length);
+  INLINE_SYSCALL_CALL (munmap, (void *) data, length);
 }
 
 static const BfsImageIo bfs_io =

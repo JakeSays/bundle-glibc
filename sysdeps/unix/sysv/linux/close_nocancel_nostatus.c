@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 #include <not-cancel.h>
@@ -23,6 +24,12 @@
 void
 __close_nocancel_nostatus (int fd)
 {
+  /* The third way a descriptor is let go, after close and close_nocancel. The closefrom fallback
+     loops over this one, and it leaks the same way if it does not tell the table.  */
+#if IS_IN (libc)
+  __bfs_forget (fd);
+#endif
+
   INTERNAL_SYSCALL_CALL (close, fd);
 }
 libc_hidden_def (__close_nocancel_nostatus)

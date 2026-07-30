@@ -16,8 +16,11 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <not-cancel.h>
 #include <sysdep.h>
 
 /* Duplicate FD to FD2, closing the old FD2 and making FD2 be
@@ -26,15 +29,30 @@ int
 __dup2 (int fd, int fd2)
 {
 #ifdef __NR_dup2
-  return INLINE_SYSCALL_CALL (dup2, fd, fd2);
+  int copy = INLINE_SYSCALL_CALL (dup2, fd, fd2);
 #else
   /* For the degenerate case, check if the fd is valid (by trying to
      get the file status flags) and return it, or else return EBADF.  */
-  if (fd == fd2)
-    return __libc_fcntl (fd, F_GETFL, 0) < 0 ? -1 : fd;
+  int copy;
 
-  return INLINE_SYSCALL_CALL (dup3, fd, fd2, 0);
+  if (fd == fd2)
+    copy = __libc_fcntl (fd, F_GETFL, 0) < 0 ? -1 : fd;
+  else
+    copy = INLINE_SYSCALL_CALL (dup3, fd, fd2, 0);
 #endif
+
+  /* The kernel has made the number; the table has to learn that it names the same file. FD2 is
+     dropped whether or not FD is ours, since the kernel closed whatever it named.  */
+#if IS_IN (libc)
+  if (copy >= 0 && !__bfs_adopt (fd, copy))
+    {
+      __close_nocancel (copy);
+      __set_errno (ENOMEM);
+      return -1;
+    }
+#endif
+
+  return copy;
 }
 libc_hidden_def (__dup2)
 weak_alias (__dup2, dup2)

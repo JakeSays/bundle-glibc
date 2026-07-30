@@ -16,6 +16,7 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <unistd.h>
 #include <sysdep-cancel.h>
 #include <not-cancel.h>
@@ -24,6 +25,13 @@
 int
 __close (int fd)
 {
+  /* The file behind it is let go first, and then the number, which the kernel gave out and takes
+     back. Both halves or neither: forgetting without closing leaks a descriptor, and closing without
+     forgetting leaves the next open able to be handed the same number with an old file behind it.  */
+#if IS_IN (libc)
+  __bfs_forget (fd);
+#endif
+
   return SYSCALL_CANCEL (close, fd);
 }
 libc_hidden_def (__close)
