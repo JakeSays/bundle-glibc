@@ -517,15 +517,18 @@ _IO_vtable_check (void)
   /* In case this libc copy is in a non-default namespace, we always
      need to accept foreign vtables because there is always a
      possibility that FILE * objects are passed across the linking
-     boundary.  */
-  {
-    Dl_info di;
-    struct link_map *l;
-    if (!rtld_active ()
-        || (_dl_addr (_IO_vtable_check, &di, &l, NULL) != 0
-            && l->l_ns != LM_ID_BASE))
-      return;
-  }
+     boundary.
+
+     Stock glibc asks _dl_addr which namespace this copy of libc was loaded into, by reading l_ns off
+     the map it hands back.  That field is past the five of the public struct link_map, so it cannot
+     be read from the loader's map -- see _dl_addr, which is where the boundary is described.
+
+     There is one namespace to be in.  A payload is a sealed closure with a single libc in it, which
+     is what makes the answer knowable without asking: this copy is the base namespace's, so the
+     check below is the one that would have been reached anyway.  Whoever adds namespaces owes this
+     site a real answer, and adding them means giving the loader a way to report one.  */
+  if (!rtld_active ())
+    return;
 
 #else /* !SHARED */
   /* We cannot perform vtable validation in the static dlopen case

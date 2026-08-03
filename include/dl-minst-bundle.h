@@ -18,7 +18,7 @@
 #ifndef _DL_MINST_BUNDLE_H
 #define _DL_MINST_BUNDLE_H 1
 
-#include <minst/minst_view.h>
+#include <bundle/BundleView.h>
 #include <stdint.h>
 
 /* Where one image sits inside the artifact, and where it shows through.
@@ -56,7 +56,7 @@ struct minst_bundle_view
 
      NULL when the artifact says nothing, which is not the same as an empty list and is why this is
      a pointer and not just a count.  */
-  const struct minst_view_environment *environment;
+  const struct BundledEnvironment *environment;
   const char *strings;
   uint32_t environment_count;
 };

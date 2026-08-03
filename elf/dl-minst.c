@@ -1,21 +1,14 @@
+/*
+ * Copyright (c) 2026, Jake Helfert
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 /* Reading the bundle an artifact carries.
-   Copyright (c) 2026, Jake Helfert
 
-   This file is part of the GNU C Library as modified for minst.
-
-   The GNU C Library is free software; you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public
-   License as published by the Free Software Foundation; either
-   version 2.1 of the License, or (at your option) any later version.
-
-   The GNU C Library is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-   Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, see
-   <https://www.gnu.org/licenses/>.  */
+   A new file rather than a modification of one, so it carries its own license and not the tree's.
+   Everything else here written for minst says the same thing, which is what this was out of step
+   with.  */
 
 #include <dl-minst.h>
 
@@ -23,8 +16,8 @@
 #include <elf.h>
 #include <ldsodefs.h>
 #include <link.h>
-#include <minst/minst_bundle.h>
-#include <minst/minst_view.h>
+#include <bundle/BundleIndex.h>
+#include <bundle/BundleView.h>
 #include <not-cancel.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -46,8 +39,8 @@ static int minst_fd = -1;
  * loader cannot read that filesystem.  bundlefs comes up inside __libc_early_init, which cannot run
  * until libc is mapped, which is this.  So every object's extent is recorded here and the loader maps
  * an offset exactly as it did before.  */
-static const struct minst_view_header *minst_note;
-static const struct minst_view_soname *minst_note_sonames;
+static const struct BundleView *minst_note;
+static const struct BundledSoName *minst_note_sonames;
 static const char *minst_note_strings;
 
 /* Stage zero's dynamic array, which exists only to carry DT_DEBUG.  Its address is taken straight
@@ -87,9 +80,9 @@ _dl_minst_bundle_view (void)
 
   if (minst_view.images == NULL)
     {
-      const struct minst_view_image *images
+      const struct BundledImage *images
 	= (const void *) ((const unsigned char *) minst_note + minst_note->image_offset);
-      const struct minst_view_mount *mounts
+      const struct BundledMount *mounts
 	= (const void *) ((const unsigned char *) minst_note + minst_note->mount_offset);
 
       uint32_t taken = 0;
@@ -99,7 +92,7 @@ _dl_minst_bundle_view (void)
 	  if (mounts[i].image >= minst_note->image_count)
 	    continue;
 
-	  const struct minst_view_image *image = &images[mounts[i].image];
+	  const struct BundledImage *image = &images[mounts[i].image];
 
 	  minst_mounts[taken].offset = image->offset;
 	  minst_mounts[taken].length = image->size;
@@ -139,19 +132,27 @@ minst_flags (void)
 bool
 _dl_minst_sealed (void)
 {
-  return (minst_flags () & MINST_BUNDLE_SEALED) != 0;
+  return (minst_flags () & BUNDLE_SEALED) != 0;
 }
 
 bool
 _dl_minst_blank_env (void)
 {
-  return (minst_flags () & MINST_BUNDLE_BLANK_ENV) != 0;
+  return (minst_flags () & BUNDLE_BLANK_ENV) != 0;
 }
 
 bool
 _dl_minst_trace (void)
 {
-  return (minst_flags () & MINST_BUNDLE_TRACE) != 0;
+  /* A list of category names now, not a flag bit -- BUNDLE_TRACE was retired when "trace" stopped
+     being one thing, and the bit is deliberately not reused.  What is answered here is only whether
+     the artifact asked for anything at all, because this loader has no use for the distinctions: it
+     sets dl_debug_mask wholesale below, and the loader that reads the list category by category is
+     the bundle linker, which replaces this half entirely.  */
+  if (minst_note == NULL || minst_note->trace_categories == 0)
+    return false;
+
+  return minst_note_strings[minst_note->trace_categories] != '\0';
 }
 
 bool
@@ -164,9 +165,9 @@ _dl_minst_runtime_library (uint32_t index, const char **name)
 
   for (uint32_t i = 0; i < minst_note->soname_count; ++i)
     {
-      const struct minst_view_soname *entry = &minst_note_sonames[i];
+      const struct BundledSoName *entry = &minst_note_sonames[i];
 
-      if ((entry->flags & MINST_SONAME_PRELOAD) == 0)
+      if ((entry->flags & BUNDLE_SONAME_PRELOAD) == 0)
 	continue;
 
       if (seen++ != index)
@@ -192,13 +193,13 @@ read_exactly (void *destination, size_t length, off_t offset)
    anyone, so the owner and these together are what say it is ours, and every count is checked against
    the space actually there.  */
 static bool
-view_is_sound (const struct minst_view_header *header, uint32_t descsz)
+view_is_sound (const struct BundleView *header, uint32_t descsz)
 {
   if (descsz < sizeof (*header))
     return false;
-  if (header->magic != MINST_VIEW_MAGIC)
+  if (header->magic != BUNDLE_VIEW_MAGIC)
     return false;
-  if (header->version != MINST_VIEW_VERSION)
+  if (header->version != BUNDLE_VIEW_VERSION)
     return false;
   if (header->string_offset > descsz
       || header->string_size > descsz - header->string_offset)
@@ -206,12 +207,12 @@ view_is_sound (const struct minst_view_header *header, uint32_t descsz)
   if (header->soname_offset > descsz)
     return false;
   if (header->soname_count
-      > (descsz - header->soname_offset) / sizeof (struct minst_view_soname))
+      > (descsz - header->soname_offset) / sizeof (struct BundledSoName))
     return false;
   if (header->environment_offset > descsz)
     return false;
   if (header->environment_count
-      > (descsz - header->environment_offset) / sizeof (struct minst_view_environment))
+      > (descsz - header->environment_offset) / sizeof (struct BundledEnvironment))
     return false;
   return true;
 }
@@ -231,15 +232,15 @@ scan_notes (const unsigned char *cursor, const unsigned char *end)
       if (cursor > end)
 	return;
 
-      if (note->n_namesz != sizeof MINST_BUNDLE_OWNER)
+      if (note->n_namesz != sizeof BUNDLE_NOTE_OWNER)
 	continue;
-      if (memcmp (name, MINST_BUNDLE_OWNER, note->n_namesz) != 0)
-	continue;
-
-      if (note->n_type != MINST_VIEW_NOTE_TYPE)
+      if (memcmp (name, BUNDLE_NOTE_OWNER, note->n_namesz) != 0)
 	continue;
 
-      const struct minst_view_header *view = (const void *) desc;
+      if (note->n_type != BUNDLE_VIEW_NOTE_TYPE)
+	continue;
+
+      const struct BundleView *view = (const void *) desc;
       if (minst_note != NULL || !view_is_sound (view, note->n_descsz))
 	continue;
 
@@ -360,7 +361,7 @@ _dl_minst_find (const char *name, struct minst_member *member)
     {
       for (uint32_t i = 0; i < minst_note->soname_count; ++i)
 	{
-	  const struct minst_view_soname *entry = &minst_note_sonames[i];
+	  const struct BundledSoName *entry = &minst_note_sonames[i];
 
 	  /* Nothing to map, which is a compressed object: it has no contiguous layout, and this
 	     loader has nothing to decompress it with.  Passed over rather than failed here, so the
@@ -369,7 +370,7 @@ _dl_minst_find (const char *name, struct minst_member *member)
 	    continue;
 
 	  /* The machine's copy is the one to use, so this is not a member to map at all.  */
-	  if ((entry->flags & MINST_SONAME_HOST) != 0)
+	  if ((entry->flags & BUNDLE_SONAME_HOST) != 0)
 	    continue;
 
 	  if (!names_member (name, minst_note_strings + entry->name))

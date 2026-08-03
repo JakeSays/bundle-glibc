@@ -33,7 +33,6 @@ routines = \
   init-first \
   libc-start \
   libc-tls \
-  minst-environment \
   sysdep \
   version \
   # routines

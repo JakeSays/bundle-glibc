@@ -759,7 +759,7 @@ init_tls (size_t naudit)
   _dl_tls_static_surplus_init (naudit);
 
   /* Compute the TLS offsets for the various blocks.  */
-  _dl_determine_tlsoffset ();
+  _dl_determine_tlsoffset (GL(dl_ns)[LM_ID_BASE]._ns_loaded);
 
   /* Construct the static TLS block and the dtv for the initial
      thread.  For some platforms this will include allocating memory
@@ -1373,10 +1373,12 @@ dl_main (const ElfW(Phdr) *phdr,
     _dl_minst_open (execfn);
   }
 
-  /* Tracing, if the artifact asked to be built with it.  LD_DEBUG is not read here and will not be:
-     what an artifact does must not depend on the environment it meets.  So the request travels in the
-     bundle instead, which also means it can be turned on for a machine where something goes wrong
-     rather than only for the machine the loader was built on.
+  /* Tracing, if the artifact was built asking for any.  The request travels in the bundle, put there
+     by --enable-tracing, so it can be turned on for a machine where something goes wrong rather than
+     only for the machine the loader was built on.
+
+     Everything at once rather than the categories the artifact named: this loader has one switch and
+     the half that honors the list category by category is the bundle linker, which replaces it.
 
      Set here, immediately after the artifact is open and before anything is resolved, so the trace
      covers the whole of startup rather than beginning partway through it.  */

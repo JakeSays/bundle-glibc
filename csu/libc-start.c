@@ -118,31 +118,30 @@ apply_irel (void)
 #include <libc_start_call_main.h>
 
 #ifdef SHARED
-/* Initialization for dynamic executables.  Find the main executable
-   link map and run its init functions.  */
+/* Initialization for dynamic executables.  Run the executable's init
+   functions, which the loader read out of its dynamic section.
+
+   Stock glibc obtains the main map here and indexes l_info by tag.  The
+   loader answers instead, because that is the only thing libc reads a
+   link map of its own for, and not needing one is what lets it keep
+   none.  The loader is the half that parsed the dynamic section and
+   applied the load bias, so it has the answer already.
+
+   DT_PREINIT_ARRAY is not processed here.  The loader runs it, ahead of
+   the loaded libraries' constructors, which is what preinit means.  */
 static void
 call_init (int argc, char **argv, char **env)
 {
-  /* Obtain the main map of the executable.  */
-  struct link_map *l = GL(dl_ns)[LM_ID_BASE]._ns_loaded;
+  BundleInitializers initializers;
 
-  /* DT_PREINIT_ARRAY is not processed here.  It is already handled in
-     _dl_init in elf/dl-init.c.  Also see the call_init function in
-     the same file.  */
+  GL (dl_bundle_runtime)->GetExecutableInitializers (&initializers);
 
-  if (ELF_INITFINI && l->l_info[DT_INIT] != NULL)
-    DL_CALL_DT_INIT(l, l->l_addr + l->l_info[DT_INIT]->d_un.d_ptr,
-		    argc, argv, env);
+  /* DT_INIT before DT_INIT_ARRAY when both are present.  */
+  if (initializers.Init != NULL)
+    initializers.Init (argc, argv, env);
 
-  ElfW(Dyn) *init_array = l->l_info[DT_INIT_ARRAY];
-  if (init_array != NULL)
-    {
-      unsigned int jm
-	= l->l_info[DT_INIT_ARRAYSZ]->d_un.d_val / sizeof (ElfW(Addr));
-      ElfW(Addr) *addrs = (void *) (init_array->d_un.d_ptr + l->l_addr);
-      for (unsigned int j = 0; j < jm; ++j)
-	((dl_init_t) addrs[j]) (argc, argv, env);
-    }
+  for (uint32_t j = 0; j < initializers.InitArrayCount; ++j)
+    initializers.InitArray[j] (argc, argv, env);
 }
 
 #else /* !SHARED */

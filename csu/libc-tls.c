@@ -138,7 +138,7 @@ __libc_setup_tls (void)
   _dl_tls_static_surplus_init (0);
 
   /* Calculate the TLS block size.  */
-  _dl_determine_tlsoffset ();
+  _dl_determine_tlsoffset (GL(dl_ns)[LM_ID_BASE]._ns_loaded);
 
   /* See _dl_allocate_tls_storage in elf/dl-tls.c.  */
   void *tcbp;

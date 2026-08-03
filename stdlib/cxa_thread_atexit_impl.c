@@ -84,6 +84,10 @@ struct dtor_list
   dtor_func func;
   void *obj;
   struct link_map *map;
+  /* What the loader gave back for holding this destructor's module against unload, to be handed
+     back once the destructor has run.  Null when this libc keeps its own link maps, in which case
+     MAP above is what is counted in and this is unused.  */
+  void *module_token;
   struct dtor_list *next;
 };
 
@@ -111,6 +115,25 @@ __cxa_thread_atexit_impl (dtor_func func, void *obj, void *dso_symbol)
   new->obj = obj;
   new->next = tls_dtor_list;
   tls_dtor_list = new;
+
+#ifdef SHARED
+  /* When the loader keeps the record of what is loaded, it is the one that holds the module.
+     _dl_find_dso_for_object below walks GL(dl_ns)[LM_ID_BASE]._ns_loaded, and that list is empty
+     here -- this libc keeps no link maps -- so both of its sources give nothing and there is no
+     l_tls_dtor_count to count in.
+     The count lives with the loader instead, which is where the decision it guards is made: it is
+     the half that unloads, and it now refuses to unload a module whose destructor has not run.  */
+  if (GL (dl_bundle_runtime) != NULL
+      && GL (dl_bundle_runtime)->RetainModule != NULL)
+    {
+      new->map = NULL;
+      new->module_token = GL (dl_bundle_runtime)->RetainModule (dso_symbol);
+
+      return 0;
+    }
+#endif
+
+  new->module_token = NULL;
 
   /* We have to acquire the big lock to prevent a racing dlclose from pulling
      our DSO from underneath us while we're setting up our destructor.  */
@@ -154,6 +177,22 @@ __call_tls_dtors (void)
 
       tls_dtor_list = tls_dtor_list->next;
       func (cur->obj);
+
+#ifdef SHARED
+      /* Released rather than counted down, when it was the loader that held it. Same ordering
+	 requirement as below and satisfied the same way: the destructor above has returned, so
+	 nothing in the module is being used by the time it may be unloaded.  */
+      if (cur->map == NULL)
+	{
+	  if (GL (dl_bundle_runtime) != NULL
+	      && GL (dl_bundle_runtime)->ReleaseModule != NULL)
+	    GL (dl_bundle_runtime)->ReleaseModule (cur->module_token);
+
+	  free (cur);
+
+	  continue;
+	}
+#endif
 
       /* Ensure that the MAP dereference happens before
 	 l_tls_dtor_count decrement.  That way, we protect this access from a

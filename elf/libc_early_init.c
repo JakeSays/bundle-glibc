@@ -33,6 +33,27 @@ _Bool __libc_initial;
 void
 __libc_early_init (_Bool initial)
 {
+#ifdef SHARED
+  /* The environment the app carries, if it carries one, before anything can read a variable and --
+     just as important -- before the loader performs the copy relocations.
+
+     A program that names environ directly takes a copy of it, and that copy is made once. Setting
+     __environ in libc's own ELF constructor is too late for it: constructors run after relocation,
+     so the copy would already hold whatever was there before, which is nothing. Here is early
+     enough, because the loader calls this before it copies anything and before any constructor.
+
+     csu/init-first.c sets it again from the same source, because that constructor assigns __environ
+     from the stack unconditionally and would otherwise put the stack's block back.  */
+  if (GL (dl_bundle_runtime) != NULL
+      && GL (dl_bundle_runtime)->GetEnvironment != NULL)
+    {
+      char **carried = GL (dl_bundle_runtime)->GetEnvironment ();
+
+      if (carried != NULL)
+	__environ = carried;
+    }
+#endif
+
   /* Initialize ctype data.  */
   __ctype_init ();
 

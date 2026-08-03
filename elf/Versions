@@ -80,7 +80,8 @@ ld {
     __tunable_is_initialized;
     __tunable_get_val;
 
-    # What the loader knows about the artifact, for libc to bring the bundle filesystem up against.
-    _dl_minst_bundle_view;
+    # What the linker looks up to introduce itself. The only symbol either half resolves by name;
+    # everything after this goes through the structure it is handed.
+    __bundle_initialize_runtime;
   }
 }

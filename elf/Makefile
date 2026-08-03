@@ -126,6 +126,9 @@ shared-only-routines = \
 rtld-routines = \
   $(all-dl-routines) \
   dl-audit \
+  dl-bundle-dlfcn \
+  dl-bundle-runtime \
+  dl-bundle-tls \
   dl-compat \
   dl-diagnostics \
   dl-diagnostics-cpu \
@@ -1655,8 +1658,13 @@ $(objpfx)ld.so: $(objpfx)librtld.os $(ld-map)
 		  $(filter-out $(map-file),$^) $(load-map-file)		\
 		  -Wl,-soname=$(rtld-installed-name)
 	$(call after-link,$@.new)
+# ld.so resolves nothing at load time in stock glibc, because it runs before anything is in a state
+# to resolve it.  This build is a shim: the bundle linker maps it alongside libc.so, relocates both,
+# and only then calls into it.  __libc_early_init is the one thing it reaches across for -- see
+# dl-bundle-runtime.c, which explains why it is a weak undefined reference rather than a strong one
+# -- and it is only ever called after relocation.  Every other undefined symbol is still a mistake.
 	$(READELF) -s $@.new \
-	  | $(AWK) '($$7 ~ /^UND(|EF)$$/ && $$1 != "0:" && $$4 != "REGISTER") { print; p=1 } END { exit p != 0 }'
+	  | $(AWK) '($$7 ~ /^UND(|EF)$$/ && $$1 != "0:" && $$4 != "REGISTER" && $$8 != "__libc_early_init") { print; p=1 } END { exit p != 0 }'
 	mv -f $@.new $@
 
 ifeq (yes,$(build-shared))

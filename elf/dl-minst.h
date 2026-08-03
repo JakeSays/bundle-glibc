@@ -1,21 +1,14 @@
+/*
+ * Copyright (c) 2026, Jake Helfert
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
 /* Reading the bundle an artifact carries.
-   Copyright (c) 2026, Jake Helfert
 
-   This file is part of the GNU C Library as modified for minst.
-
-   The GNU C Library is free software; you can redistribute it and/or
-   modify it under the terms of the GNU Lesser General Public
-   License as published by the Free Software Foundation; either
-   version 2.1 of the License, or (at your option) any later version.
-
-   The GNU C Library is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-   Lesser General Public License for more details.
-
-   You should have received a copy of the GNU Lesser General Public
-   License along with the GNU C Library; if not, see
-   <https://www.gnu.org/licenses/>.  */
+   A new file rather than a modification of one, so it carries its own license and not the tree's.
+   Everything else here written for minst says the same thing, which is what this was out of step
+   with.  */
 
 #ifndef _DL_MINST_H
 #define _DL_MINST_H 1
@@ -67,9 +60,9 @@ extern int _dl_minst_fd (void) attribute_hidden;
    and its dependency closure cannot even be enumerated ahead of time.  */
 extern bool _dl_minst_sealed (void) attribute_hidden;
 
-/* Whether to trace what the loader does to stderr.  The environment cannot ask for this -- a loader
-   that ignores the environment ignores LD_DEBUG with it -- so the artifact carries the switch, and an
-   artifact that misbehaves somewhere unreproducible can be rebuilt with it and run there.  */
+/* Whether the artifact asked for any tracing at all, from the category list --enable-tracing put in
+   the view note.  Only the yes-or-no, because this loader turns dl_debug_mask on wholesale; the half
+   that reads the categories individually is the bundle linker.  */
 extern bool _dl_minst_trace (void) attribute_hidden;
 
 /* Whether LD_PRELOAD, LD_LIBRARY_PATH and GLIBC_TUNABLES should be emptied in the environment.

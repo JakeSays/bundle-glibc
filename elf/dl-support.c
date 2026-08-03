@@ -57,6 +57,11 @@ int _dl_debug_mask;
 int _dl_lazy;
 int _dl_dynamic_weak;
 
+/* What the loader and this libc say to each other.  Always NULL here: a program linked statically
+   has no loader to have introduced one, and the code that reads this treats NULL as "no app", which
+   is exactly what such a program is running out of.  */
+const RuntimeInterface *_dl_bundle_runtime;
+
 /* If nonzero print warnings about problematic situations.  */
 int _dl_verbose;
 

@@ -20,119 +20,43 @@
 #include <stddef.h>
 #include <ldsodefs.h>
 
+/* Stock glibc finds the containing object with _dl_find_dso_for_object and then searches its symbol
+   table by hand, reaching l_info[DT_SYMTAB], l_info[DT_STRTAB], l_info[DT_STRSZ] and one of the two
+   hash tables to do it.
 
-static inline void
-__attribute ((always_inline))
-determine_info (const ElfW(Addr) addr, struct link_map *match, Dl_info *info,
-		struct link_map **mapp, const ElfW(Sym) **symbolp)
-{
-  /* Now we know what object the address lies in.  */
-  info->dli_fname = match->l_name;
-  info->dli_fbase = (void *) match->l_map_start;
+   The loader answers instead.  Address to symbol is a lookup it already implements for its own
+   relocation work, and those four l_info entries were the last thing in libc that wanted a link map
+   of its own -- forwarding is what makes keeping none possible rather than merely tidy.
 
-  /* If this is the main program the information is incomplete.  */
-  if (__builtin_expect (match->l_name[0], 'a') == '\0'
-      && match->l_type == lt_executable)
-    info->dli_fname = _dl_argv[0];
-
-  const ElfW(Sym) *symtab
-    = (const ElfW(Sym) *) D_PTR (match, l_info[DT_SYMTAB]);
-  const char *strtab = (const char *) D_PTR (match, l_info[DT_STRTAB]);
-
-  ElfW(Word) strtabsize = match->l_info[DT_STRSZ]->d_un.d_val;
-
-  const ElfW(Sym) *matchsym = NULL;
-  if (match->l_info[ELF_MACHINE_GNU_HASH_ADDRIDX] != NULL)
-    {
-      /* We look at all symbol table entries referenced by the hash
-	 table.  */
-      for (Elf_Symndx bucket = 0; bucket < match->l_nbuckets; ++bucket)
-	{
-	  Elf32_Word symndx = match->l_gnu_buckets[bucket];
-	  if (symndx != 0)
-	    {
-	      const Elf32_Word *hasharr = &match->l_gnu_chain_zero[symndx];
-
-	      do
-		{
-		  /* The hash table never references local symbols so
-		     we can omit that test here.  */
-		  symndx = ELF_MACHINE_HASH_SYMIDX (match, hasharr);
-		  if ((symtab[symndx].st_shndx != SHN_UNDEF
-		       || symtab[symndx].st_value != 0)
-		      && symtab[symndx].st_shndx != SHN_ABS
-		      && ELFW(ST_TYPE) (symtab[symndx].st_info) != STT_TLS
-		      && DL_ADDR_SYM_MATCH (match, &symtab[symndx],
-					    matchsym, addr)
-		      && symtab[symndx].st_name < strtabsize)
-		    matchsym = (ElfW(Sym) *) &symtab[symndx];
-		}
-	      while ((*hasharr++ & 1u) == 0);
-	    }
-	}
-    }
-  else if (match->l_info[DT_HASH] != NULL)
-    {
-      const ElfW (Sym) *symtabend
-	  = (symtab + ((Elf_Symndx *) D_PTR (match, l_info[DT_HASH]))[1]);
-
-      for (; (void *) symtab < (void *) symtabend; ++symtab)
-	if ((ELFW(ST_BIND) (symtab->st_info) == STB_GLOBAL
-	     || ELFW(ST_BIND) (symtab->st_info) == STB_WEAK)
-	    && __glibc_likely (!dl_symbol_visibility_binds_local_p (symtab))
-	    && ELFW(ST_TYPE) (symtab->st_info) != STT_TLS
-	    && (symtab->st_shndx != SHN_UNDEF
-		|| symtab->st_value != 0)
-	    && symtab->st_shndx != SHN_ABS
-	    && DL_ADDR_SYM_MATCH (match, symtab, matchsym, addr)
-	    && symtab->st_name < strtabsize)
-	  matchsym = (ElfW(Sym) *) symtab;
-    }
-  /* In the absence of a hash table, treat the object as if it has no symbol.
-   */
-
-  if (mapp)
-    *mapp = match;
-  if (symbolp)
-    *symbolp = matchsym;
-
-  if (matchsym)
-    {
-      /* We found a symbol close by.  Fill in its name and exact
-	 address.  */
-      lookup_t matchl = LOOKUP_VALUE (match);
-
-      info->dli_sname = strtab + matchsym->st_name;
-      info->dli_saddr = DL_SYMBOL_ADDRESS (matchl, matchsym);
-    }
-  else
-    {
-      /* No symbol matches.  We return only the containing object.  */
-      info->dli_sname = NULL;
-      info->dli_saddr = NULL;
-    }
-}
-
+   SYMBOLP is what dladdr1's RTLD_DL_SYMENT wants: the ElfW(Sym) the answer came from.  The loader
+   found it either way in order to fill in dli_sname, so it hands it back rather than making this
+   half search a symbol table it has no business reading.  */
 
 int
 _dl_addr (const void *address, Dl_info *info,
 	  struct link_map **mapp, const ElfW(Sym) **symbolp)
 {
-  const ElfW(Addr) addr = DL_LOOKUP_ADDRESS (address);
-  int result = 0;
+  int result = GL (dl_bundle_runtime)->DescribeAddress (address, info,
+						        (const void **) symbolp);
 
-  /* Protect against concurrent loads and unloads.  */
-  __rtld_lock_lock_recursive (GL(dl_load_lock));
-
-  struct link_map *l = _dl_find_dso_for_object (addr);
-
-  if (l)
+  if (mapp != NULL)
     {
-      determine_info (addr, l, info, mapp, symbolp);
-      result = 1;
-    }
+      *mapp = NULL;
 
-  __rtld_lock_unlock_recursive (GL(dl_load_lock));
+      /* The loader's own map for the containing object, which is what dlfo_link_map is.  Only the
+	 five fields of the public struct link_map in <link.h> may be read from it -- l_addr, l_name,
+	 l_ld, l_next, l_prev -- because that is the layout both halves agree on.  Anything further
+	 in is at an offset only one build of glibc knows, and the loader is not that build.
+
+	 Every caller in the tree reads l_addr and nothing else.  */
+      if (result != 0)
+	{
+	  struct dl_find_object object;
+
+	  if (GL (dl_bundle_runtime)->DescribeObject (address, &object) == 0)
+	    *mapp = object.dlfo_link_map;
+	}
+    }
 
   return result;
 }

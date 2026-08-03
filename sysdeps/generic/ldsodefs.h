@@ -41,6 +41,10 @@
 #include <list_t.h>
 #include <hugepages.h>
 
+/* The contract between the loader and this libc.  Compiled by both halves from this one file, so
+   neither can read it differently than the other wrote it.  */
+#include <bundle/RuntimeInterface.h>
+
 __BEGIN_DECLS
 
 #define VERSYMIDX(sym)	(DT_NUM + DT_THISPROCNUM + DT_VERSIONTAGIDX (sym))
@@ -492,6 +496,19 @@ struct rtld_global
   /* Page size used for THP segment load.  */
   EXTERN size_t _dl_elf_thp_pagesize;
 #endif
+
+  /* What the loader and this libc say to each other, or NULL when nothing introduced itself -- an
+     ordinary program on an ordinary machine, which is not an error.
+
+     One pointer rather than a function per thing libc wants, so that what the two halves agree on
+     lives in runtime/include/bundle/RuntimeInterface.h and nowhere else.  Adding to that contract
+     does not mean adding to this structure, which matters because this one is GLIBC_PRIVATE and
+     version-locked to the release that defines it.
+
+     Here rather than in rtld_global_ro because it is written during the handshake, and the handshake
+     runs before anything has been relocated -- which is well before there is a settled answer about
+     when a read-only-after-relocation area becomes read-only.  */
+  EXTERN const struct RuntimeInterface *_dl_bundle_runtime;
 #ifdef SHARED
 };
 # define __rtld_global_attribute__
@@ -1199,7 +1216,7 @@ extern void _dl_assign_tls_modid (struct link_map *l) attribute_hidden;
 extern size_t _dl_count_modids (void) attribute_hidden;
 
 /* Calculate offset of the TLS blocks in the static TLS block.  */
-extern void _dl_determine_tlsoffset (void) attribute_hidden;
+extern void _dl_determine_tlsoffset (struct link_map *head) attribute_hidden;
 
 /* Calculate the size of the static TLS surplus, when the given
    number of audit modules are loaded.  */

@@ -253,8 +253,19 @@ _dl_count_modids (void)
 }
 
 
+/* HEAD is the chain of modules to lay out, linked by l_next, executable first.
+
+   Stock glibc takes no argument and walks GL(dl_ns)[LM_ID_BASE]._ns_loaded.  It is passed in because
+   the caller is no longer always the loader laying out its own list: a payload's libc keeps no list
+   of loaded objects, and the records it builds to reach this algorithm exist for this call and are
+   read by nothing else.  Publishing them on _ns_loaded to be found here would put stubs on the list
+   the rest of glibc treats as the real one.
+
+   Only the thread-local fields are read -- l_tls_blocksize, l_tls_firstbyte_offset and l_tls_align
+   -- and only l_tls_offset is written, so a caller with nothing else to say need fill in nothing
+   else.  */
 void
-_dl_determine_tlsoffset (void)
+_dl_determine_tlsoffset (struct link_map *head)
 {
   size_t max_align = TCB_ALIGNMENT;
   size_t freetop = 0;
@@ -292,8 +303,7 @@ _dl_determine_tlsoffset (void)
   /* We simply start with zero.  */
   size_t offset = 0;
 
-  for (struct link_map *l = GL(dl_ns)[LM_ID_BASE]._ns_loaded; l != NULL;
-       l = l->l_next)
+  for (struct link_map *l = head; l != NULL; l = l->l_next)
     {
       if (l->l_tls_blocksize == 0)
 	continue;
@@ -375,8 +385,7 @@ _dl_determine_tlsoffset (void)
   /* The TLS blocks start right after the TCB.  */
   size_t offset = TLS_TCB_SIZE;
 
-  for (struct link_map *l = GL(dl_ns)[LM_ID_BASE]._ns_loaded; l != NULL;
-       l = l->l_next)
+  for (struct link_map *l = head; l != NULL; l = l->l_next)
     {
       if (l->l_tls_blocksize == 0)
 	continue;

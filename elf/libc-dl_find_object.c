@@ -19,8 +19,14 @@
 #include <ldsodefs.h>
 #include <dlfcn.h>
 
+/* Stock glibc forwards to GLRO (dl_find_object), which answers from a sorted lock-free array the
+   loader maintains across dlopen and dlclose.  That array is built by walking the list of loaded
+   objects, so it goes where the list went.
+
+   This is libgcc's unwind path, and the only one it takes -- a library built by GCC against glibc
+   2.35 or later reaches every C++ throw through here.  */
 int
 _dl_find_object (void *address, struct dl_find_object *result)
 {
-  return GLRO (dl_find_object) (address, result);
+  return GL (dl_bundle_runtime)->DescribeObject (address, result);
 }

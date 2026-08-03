@@ -26,7 +26,6 @@
 #include <sys/types.h>
 #include <libc-internal.h>
 
-#include <dl-minst-bundle.h>
 #include <ldsodefs.h>
 
 /* Remember the command line argument and environment contents for
@@ -64,10 +63,24 @@ _init_first (int argc, char **argv, char **envp)
   __environ = envp;
 
 #ifdef SHARED
-  /* What the artifact this process runs out of says the program should be told. Here because it is
-     the first point where there is an environment to change, and before any other object's
-     constructor because libc's runs first. Does nothing outside an artifact.  */
-  __minst_apply_environment ();
+  /* Unless the app carries an environment of its own, in which case the loader built one and this is
+     where it displaces the stack's.
+
+     Here because this is a constructor of libc itself, and every other object in the process depends
+     on libc -- so this runs before any of their constructors, and long before main.  Nothing has had
+     the chance to read a variable yet.
+
+     The stack's block cannot be edited in place: the kernel writes a fixed array of fixed strings
+     with no room to grow, so setting a variable that was not already there, or lengthening one that
+     was, has nowhere to go.  The loader builds a new block instead and hands it over here.  */
+  if (GL (dl_bundle_runtime) != NULL
+      && GL (dl_bundle_runtime)->GetEnvironment != NULL)
+    {
+      char **carried = GL (dl_bundle_runtime)->GetEnvironment ();
+
+      if (carried != NULL)
+	__environ = carried;
+    }
 #endif
 
 #ifndef SHARED
