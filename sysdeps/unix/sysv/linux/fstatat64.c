@@ -156,14 +156,14 @@ __fstatat64_time64 (int fd, const char *file, struct __stat64_t64 *buf,
      and opendir refused it.  */
   if (file != NULL && file[0] == '\0' && (flag & AT_EMPTY_PATH) != 0)
     {
-      if (__bfs_owns (fd) && __bfs_fstat (fd, buf) == 0)
+      if (BfsOwns (fd) && __bfs_fstat (fd, buf) == 0)
 	return 0;
     }
   else
     {
       char resolved[PATH_MAX];
 
-      if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved))
+      if (BfsResolveAt (fd, file, resolved, sizeof (resolved))
 	  && __bfs_stat_path (resolved, buf) == 0)
 	return 0;
     }

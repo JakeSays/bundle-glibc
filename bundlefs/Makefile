@@ -20,9 +20,10 @@ erofs-dir := $(bundlefs-dir)/third_party/erofs-utils
 
 # Reached the way elf/ reaches ../locale/programs.
 vpath %.c $(bundlefs-dir)/lib
+vpath %.c $(bundlefs-dir)/runtime
 vpath %.c $(erofs-dir)/lib
 
-# Ours, from the submodule.
+# The reader, from the submodule.
 bundlefs-routines := \
   BfsDirectory \
   BfsFile \
@@ -31,11 +32,19 @@ bundlefs-routines := \
   ErofsWriteStubs \
   # bundlefs-routines
 
-# Ours, and only meaningful inside a libc: what brings the reader up against the artifact the loader
-# opened, and what reads it without going through interposable names.
-libc-routines := \
+# The libc side, also from the submodule: mounting what the app's view note describes, and the
+# descriptor table these wrappers are routed through. It was written here, when glibc was the only
+# libc there was; musl needs the same thing and it is now one copy rather than two.
+runtime-routines := \
   BfsDescriptors \
-  BfsProcess \
+  BfsRuntime \
+  # runtime-routines
+
+# What is genuinely glibc's, and all that is left of it: raw syscalls, one lock, errno, the page size
+# and the two stat fills. Everything the shared half needs of those arrives through
+# BfsPlatformInterface.
+libc-routines := \
+  BfsPlatform \
   # libc-routines
 
 # Vendored, and the smallest set that reads an image. Everything else in erofs-utils is reachable
@@ -54,7 +63,7 @@ erofs-routines := \
   zmap \
   # erofs-routines
 
-routines := $(bundlefs-routines) $(erofs-routines) $(libc-routines)
+routines := $(bundlefs-routines) $(erofs-routines) $(runtime-routines) $(libc-routines)
 
 # What the vendored sources need in order to compile at all: their own headers, the private ones in
 # their lib directory that the stubs reach for, and the configuration autoconf would have written.
@@ -68,9 +77,12 @@ $(foreach r,$(erofs-routines),$(eval CFLAGS-$(r).c += $(erofs-cflags)))
 $(foreach r,$(bundlefs-routines),$(eval CFLAGS-$(r).c += $(erofs-cflags) -I$(bundlefs-dir)/lib/include))
 
 # Ours needs the reader's public headers, and nothing of erofs: it talks to the library rather than
-# past it, which is the same boundary a payload sees.
-CFLAGS-BfsProcess.c += -I$(bundlefs-dir)/lib/include
-CFLAGS-BfsDescriptors.c += -I$(bundlefs-dir)/lib/include
+# past it, which is the same boundary a payload sees. The runtime half needs its own published
+# headers as well, and the bundle format, which the tree's CPPFLAGS already reaches.
+bfs-include := -I$(bundlefs-dir)/lib/include -I$(bundlefs-dir)/runtime/include
+
+$(foreach r,$(runtime-routines),$(eval CFLAGS-$(r).c += $(bfs-include)))
+CFLAGS-BfsPlatform.c += $(bfs-include)
 
 # erofs declares erofs_get_configure() with an empty parameter list, which in C means unspecified
 # rather than none. The declaration is in a header everything includes, so every source needs the

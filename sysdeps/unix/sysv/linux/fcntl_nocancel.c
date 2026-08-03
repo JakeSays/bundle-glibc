@@ -55,9 +55,9 @@ __fcntl64_nocancel_adjusted (int fd, int cmd, void *arg)
      file's. F_ADD_SEALS passes straight through, which matters: the seal on a new descriptor is set
      by way of this function.  */
 #if IS_IN (libc)
-  if (cmd == F_GETFL && __bfs_owns (fd))
+  if (cmd == F_GETFL && BfsOwns (fd))
     {
-      int flags = __bfs_flags (fd);
+      int flags = BfsFlags (fd);
 
       if (flags >= 0)
 	return flags;
@@ -67,7 +67,7 @@ __fcntl64_nocancel_adjusted (int fd, int cmd, void *arg)
     {
       int copy = INLINE_SYSCALL_CALL (fcntl64, fd, cmd, (void *) arg);
 
-      if (copy >= 0 && !__bfs_adopt (fd, copy))
+      if (copy >= 0 && !BfsAdopt (fd, copy))
 	{
 	  __close_nocancel (copy);
 	  __set_errno (ENOMEM);

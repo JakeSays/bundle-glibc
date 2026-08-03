@@ -29,8 +29,8 @@ __getdents64 (int fd, void *buf, size_t nbytes)
   /* A carried directory's entries, written into this buffer as they are read out of the image.
      Weakly referenced, for the reason read.c gives.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_getdents64 (fd, buf, nbytes);
+  if (BfsOwns (fd))
+    return BfsReadDirectoryEntries (fd, buf, nbytes);
 #endif
 
   /* The system call takes an unsigned int argument, and some length

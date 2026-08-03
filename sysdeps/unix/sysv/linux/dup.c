@@ -25,7 +25,7 @@ __dup (int fd)
   int copy = INLINE_SYSCALL_CALL (dup, fd);
 
 #if IS_IN (libc)
-  if (copy >= 0 && !__bfs_adopt (fd, copy))
+  if (copy >= 0 && !BfsAdopt (fd, copy))
     {
       __close_nocancel (copy);
       __set_errno (ENOMEM);

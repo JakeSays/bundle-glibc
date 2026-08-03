@@ -29,7 +29,7 @@ __close (int fd)
      back. Both halves or neither: forgetting without closing leaks a descriptor, and closing without
      forgetting leaves the next open able to be handed the same number with an old file behind it.  */
 #if IS_IN (libc)
-  __bfs_forget (fd);
+  BfsForget (fd);
 #endif
 
   return SYSCALL_CANCEL (close, fd);

@@ -29,7 +29,7 @@ __close_nocancel (int fd)
      file stays in the table -- and the next memfd_create is handed that number back with the old
      file behind it.  */
 #if IS_IN (libc)
-  __bfs_forget (fd);
+  BfsForget (fd);
 #endif
 
   return INLINE_SYSCALL_CALL (close, fd);

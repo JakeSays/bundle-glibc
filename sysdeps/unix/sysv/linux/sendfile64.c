@@ -37,7 +37,7 @@ sendfile64 (int out_fd, int in_fd, off64_t *offset, size_t count)
      descriptor here instead. The one unavoidable copy on the read path: the destination is somebody
      else's file, so the content has to cross.  */
 #if IS_IN (libc)
-  if (__bfs_owns (in_fd))
+  if (BfsOwns (in_fd))
     {
       char buffer[65536];
       size_t done = 0;
@@ -50,7 +50,7 @@ sendfile64 (int out_fd, int in_fd, off64_t *offset, size_t count)
 
 	  off64_t at = offset == NULL ? 0 : *offset + (off64_t) done;
 
-	  ssize_t got = __bfs_sendfile_read (in_fd, buffer, want,
+	  ssize_t got = BfsSendfileRead (in_fd, buffer, want,
 					     offset == NULL ? NULL : &at);
 	  if (got < 0)
 	    return done > 0 ? (ssize_t) done : -1;

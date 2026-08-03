@@ -26,8 +26,8 @@ __libc_pread64 (int fd, void *buf, size_t count, off64_t offset)
   /* Read where it lies, without touching the descriptor's position -- which is the whole difference
      between this and read, and matters here because a duplicated number shares that position.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_pread (fd, buf, count, offset);
+  if (BfsOwns (fd))
+    return BfsPread (fd, buf, count, offset);
 #endif
 
   return SYSCALL_CANCEL (pread64, fd, buf, count, SYSCALL_LL64_PRW (offset));

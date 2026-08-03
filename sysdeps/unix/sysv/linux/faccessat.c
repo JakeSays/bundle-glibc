@@ -41,7 +41,7 @@ __faccessat (int fd, const char *file, int mode, int flag)
       char resolved[PATH_MAX];
       struct stat64 described;
 
-      if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved))
+      if (BfsResolveAt (fd, file, resolved, sizeof (resolved))
 	  && __bfs_stat_path (resolved, &described) == 0)
 	{
 	  if ((mode & X_OK) == 0

@@ -25,8 +25,8 @@ ssize_t
 preadv64 (int fd, const struct iovec *vector, int count, off64_t offset)
 {
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_preadv (fd, vector, count, offset);
+  if (BfsOwns (fd))
+    return BfsPreadVector (fd, vector, count, offset);
 #endif
 
   return SYSCALL_CANCEL (preadv, fd, vector, count, LO_HI_LONG (offset));

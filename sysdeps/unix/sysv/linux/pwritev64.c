@@ -27,7 +27,7 @@ pwritev64 (int fd, const struct iovec *vector, int count, off64_t offset)
 {
   /* Opened read-only, so this is EBADF -- see bundlefs-descriptors.h.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
+  if (BfsOwns (fd))
     {
       __set_errno (EBADF);
       return -1;

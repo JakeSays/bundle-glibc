@@ -40,7 +40,7 @@ __open64_nocancel (const char *file, int oflag, ...)
   /* The same consult open makes. stdio comes through here for a stream marked
      _IO_FLAGS2_NOTCANCEL, which is what glibc's own internal streams use.  */
 #if IS_IN (libc)
-  int carried = __bfs_open_path (file, oflag);
+  int carried = BfsOpenPath (file, oflag);
 
   if (carried >= 0)
     return carried;

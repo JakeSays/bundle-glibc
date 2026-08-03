@@ -27,7 +27,7 @@ __writev (int fd, const struct iovec *iov, int iovcnt)
 {
   /* Opened read-only, so this is EBADF -- see bundlefs-descriptors.h.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
+  if (BfsOwns (fd))
     {
       __set_errno (EBADF);
       return -1;

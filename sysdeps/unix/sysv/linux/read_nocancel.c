@@ -28,8 +28,8 @@ __read_nocancel (int fd, void *buf, size_t nbytes)
      _IO_FLAGS2_NOTCANCEL, which is what glibc's own internal streams use -- so without it a bundled
      path opened by one of those reads as an empty file.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_read (fd, buf, nbytes);
+  if (BfsOwns (fd))
+    return BfsRead (fd, buf, nbytes);
 #endif
 
   return INLINE_SYSCALL_CALL (read, fd, buf, nbytes);

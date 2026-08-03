@@ -44,7 +44,7 @@ __dup2 (int fd, int fd2)
   /* The kernel has made the number; the table has to learn that it names the same file. FD2 is
      dropped whether or not FD is ours, since the kernel closed whatever it named.  */
 #if IS_IN (libc)
-  if (copy >= 0 && !__bfs_adopt (fd, copy))
+  if (copy >= 0 && !BfsAdopt (fd, copy))
     {
       __close_nocancel (copy);
       __set_errno (ENOMEM);

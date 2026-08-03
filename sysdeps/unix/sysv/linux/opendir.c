@@ -99,7 +99,7 @@ __opendir (const char *name)
   /* A directory the artifact carries, whose descriptor holds no entries: getdents64 reads them out of
      the image when something asks.  */
 #if IS_IN (libc)
-  int carried = __bfs_opendir_fd (name);
+  int carried = BfsOpenDirectory (name);
   if (carried >= 0)
     return opendir_tail (carried);
 

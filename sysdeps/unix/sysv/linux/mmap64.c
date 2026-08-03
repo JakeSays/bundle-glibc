@@ -58,8 +58,8 @@ __mmap64 (void *addr, size_t len, int prot, int flags, int fd, off64_t offset)
      Only when a descriptor is named: MAP_ANONYMOUS ignores fd, and the table says no to everything
      else in a process that is not running out of an artifact.  */
 #if IS_IN (libc)
-  if ((flags & MAP_ANONYMOUS) == 0 && __bfs_owns (fd))
-    return __bfs_mmap (addr, len, prot, flags, fd, offset);
+  if ((flags & MAP_ANONYMOUS) == 0 && BfsOwns (fd))
+    return BfsMap (addr, len, prot, flags, fd, offset);
 #endif
 
   MMAP_PREPARE (addr, len, prot, flags, fd, offset);

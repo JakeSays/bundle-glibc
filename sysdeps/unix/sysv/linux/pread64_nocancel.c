@@ -26,8 +26,8 @@ __pread64_nocancel (int fd, void *buf, size_t count, off64_t offset)
 {
   /* The same consult pread makes, for the streams that take the not-cancel branch.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_pread (fd, buf, count, offset);
+  if (BfsOwns (fd))
+    return BfsPread (fd, buf, count, offset);
 #endif
 
   return INLINE_SYSCALL_CALL (pread64, fd, buf, count, SYSCALL_LL64_PRW (offset));

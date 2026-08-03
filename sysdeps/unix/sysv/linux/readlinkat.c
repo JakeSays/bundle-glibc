@@ -23,15 +23,15 @@ readlinkat (int fd, const char *path, char *buffer, size_t length)
 #if IS_IN (libc)
   char resolved[PATH_MAX];
 
-  if (__bfs_resolve_at (fd, path, resolved, sizeof (resolved)))
+  if (BfsResolveAt (fd, path, resolved, sizeof (resolved)))
     {
-      ssize_t carried = __bfs_readlink_path (resolved, buffer, length);
+      ssize_t carried = BfsReadLinkPath (resolved, buffer, length);
 
       if (carried >= 0)
 	return carried;
 
       /* Carried, but not a link. EINVAL rather than the kernel's ENOENT -- see readlink.c.  */
-      if (__bfs_carries (resolved))
+      if (BfsCarries (resolved))
 	{
 	  __set_errno (EINVAL);
 	  return -1;

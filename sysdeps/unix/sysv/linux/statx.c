@@ -33,14 +33,14 @@ statx (int fd, const char *path, int flags,
 #if IS_IN (libc)
   if (path != NULL && path[0] == '\0' && (flags & AT_EMPTY_PATH) != 0)
     {
-      if (__bfs_owns (fd) && __bfs_statx_fd (fd, buf) == 0)
+      if (BfsOwns (fd) && __bfs_statx_fd (fd, buf) == 0)
 	return 0;
     }
   else
     {
       char resolved[PATH_MAX];
 
-      if (__bfs_resolve_at (fd, path, resolved, sizeof (resolved))
+      if (BfsResolveAt (fd, path, resolved, sizeof (resolved))
 	  && __bfs_statx_path (resolved, buf) == 0)
 	return 0;
     }

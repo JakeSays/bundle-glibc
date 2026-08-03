@@ -44,7 +44,7 @@ __libc_open64 (const char *file, int oflag, ...)
      the point of mounting one is that the program opens what it was built against rather than
      whatever the machine happens to have at the same name.  */
 #if IS_IN (libc)
-  int carried = __bfs_open_path (file, oflag);
+  int carried = BfsOpenPath (file, oflag);
   if (carried >= 0)
     return carried;
 

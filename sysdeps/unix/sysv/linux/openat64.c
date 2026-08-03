@@ -46,9 +46,9 @@ __libc_openat64 (int fd, const char *file, int oflag, ...)
 #if IS_IN (libc)
   char resolved[PATH_MAX];
 
-  if (__bfs_resolve_at (fd, file, resolved, sizeof (resolved)))
+  if (BfsResolveAt (fd, file, resolved, sizeof (resolved)))
     {
-      int carried = __bfs_open_path (resolved, oflag);
+      int carried = BfsOpenPath (resolved, oflag);
 
       if (carried >= 0)
 	return carried;

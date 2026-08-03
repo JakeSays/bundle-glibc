@@ -40,12 +40,12 @@ __readlink (const char *path, char *buf, size_t len)
      Falling through is only right when the artifact carries nothing there. When it does carry the
      path, this has to answer, even when the answer is a failure.  */
 #if IS_IN (libc)
-  ssize_t carried = __bfs_readlink_path (path, buf, len);
+  ssize_t carried = BfsReadLinkPath (path, buf, len);
 
   if (carried >= 0)
     return carried;
 
-  if (__bfs_carries (path))
+  if (BfsCarries (path))
     {
       __set_errno (EINVAL);
       return -1;

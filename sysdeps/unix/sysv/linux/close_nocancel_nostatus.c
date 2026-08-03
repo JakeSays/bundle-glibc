@@ -27,7 +27,7 @@ __close_nocancel_nostatus (int fd)
   /* The third way a descriptor is let go, after close and close_nocancel. The closefrom fallback
      loops over this one, and it leaks the same way if it does not tell the table.  */
 #if IS_IN (libc)
-  __bfs_forget (fd);
+  BfsForget (fd);
 #endif
 
   INTERNAL_SYSCALL_CALL (close, fd);

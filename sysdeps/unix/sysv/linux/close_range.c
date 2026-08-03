@@ -31,7 +31,7 @@ __close_range (unsigned int first, unsigned int last, int flags)
   /* CLOSE_RANGE_CLOEXEC marks rather than closes, so the numbers stay live and stay ours.  */
 #if IS_IN (libc)
   if ((flags & CLOSE_RANGE_CLOEXEC) == 0)
-    __bfs_forget_range (first, last);
+    BfsForgetRange (first, last);
 #endif
 
   return INLINE_SYSCALL_CALL (close_range, first, last, flags);

@@ -32,7 +32,7 @@ __fstat64_time64 (int fd, struct __stat64_t64 *buf)
   /* The descriptor knows what it is; the kernel only knows it is an empty anonymous file. Without
      this a carried directory looks like a regular one and opendir refuses it with ENOTDIR.  */
 #if IS_IN (libc) && __TIMESIZE == 64
-  if (__bfs_owns (fd))
+  if (BfsOwns (fd))
     return __bfs_fstat (fd, buf);
 #endif
 

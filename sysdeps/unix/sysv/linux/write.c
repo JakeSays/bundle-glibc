@@ -27,7 +27,7 @@ __libc_write (int fd, const void *buf, size_t nbytes)
 {
   /* Opened read-only, so this is EBADF -- see bundlefs-descriptors.h.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
+  if (BfsOwns (fd))
     {
       __set_errno (EBADF);
       return -1;

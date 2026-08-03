@@ -30,8 +30,8 @@ __lseek64 (int fd, off64_t offset, int whence)
   /* The image knows where it is; the kernel does not, the descriptor holding no content. Weakly
      referenced, for the reason read.c gives.  */
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_lseek (fd, offset, whence);
+  if (BfsOwns (fd))
+    return BfsSeek (fd, offset, whence);
 #endif
 
 #ifdef __NR_llseek

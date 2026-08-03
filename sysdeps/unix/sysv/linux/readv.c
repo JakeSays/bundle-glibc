@@ -25,8 +25,8 @@ ssize_t
 __readv (int fd, const struct iovec *iov, int iovcnt)
 {
 #if IS_IN (libc)
-  if (__bfs_owns (fd))
-    return __bfs_readv (fd, iov, iovcnt);
+  if (BfsOwns (fd))
+    return BfsReadVector (fd, iov, iovcnt);
 #endif
 
   return SYSCALL_CANCEL (readv, fd, iov, iovcnt);
