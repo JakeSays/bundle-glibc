@@ -16,6 +16,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sysdep.h>
@@ -24,6 +26,17 @@
 int
 __link (const char *from, const char *to)
 {
+  /* Both sides, unlike symlink. A hard link needs the file itself on the other end, and a carried one
+     is a record in an image rather than an inode anything can point a second name at.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, from) || __bfs_carries_at (AT_FDCWD, to)
+      || __bfs_carries_parent_at (AT_FDCWD, to))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifdef __NR_link
   return INLINE_SYSCALL_CALL (link, from, to);
 #else

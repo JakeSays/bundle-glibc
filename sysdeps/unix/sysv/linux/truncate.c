@@ -15,6 +15,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <sysdep.h>
 #include <errno.h>
@@ -24,6 +26,16 @@
 int
 __truncate (const char *path, off_t length)
 {
+  /* See ftruncate64, which answers for the same file reached by a descriptor. EROFS rather than that
+     one's EBADF: there is no descriptor here to be the wrong kind.  */
+# if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, path))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+# endif
+
 # ifndef __NR_truncate
   return INLINE_SYSCALL_CALL (truncate64, path,
 			      __ALIGNMENT_ARG SYSCALL_LL (length));

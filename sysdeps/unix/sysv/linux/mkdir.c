@@ -16,6 +16,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sysdep.h>
@@ -24,6 +26,16 @@
 int
 __mkdir (const char *path, mode_t mode)
 {
+  /* Either the name is one the image already answers for, or the directory it would go in is. The
+     second is the one a program actually asks for -- making a directory beside carried content.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, path) || __bfs_carries_parent_at (AT_FDCWD, path))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifdef __NR_mkdir
   return INLINE_SYSCALL_CALL (mkdir,  path, mode);
 #else

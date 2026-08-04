@@ -16,6 +16,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sysdep.h>
@@ -24,6 +26,15 @@
 int
 __rmdir (const char *path)
 {
+  /* See unlink. A carried directory is a record in the image and there is nothing to remove.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, path))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifdef __NR_rmdir
   return INLINE_SYSCALL_CALL (rmdir, path);
 #else

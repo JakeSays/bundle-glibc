@@ -15,6 +15,7 @@
 
 #include <bundlefs/BfsRuntime.h>
 
+#include <limits.h>
 #include <stddef.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -40,6 +41,48 @@ extern void __bfs_early_init (void) attribute_hidden;
 /* What the image knows, in the shape a caller of stat or statx asked for.  */
 extern void __bfs_fill_stat (const BfsFileInfo *info, struct stat64 *buffer) attribute_hidden;
 extern void __bfs_fill_statx (const BfsFileInfo *info, struct statx *buffer) attribute_hidden;
+
+/* Whether a path names something the image carries, resolved the way the *at family resolves it, and
+   whether it would put something new inside a directory the image carries.
+
+   Every wrapper that can change a file needs one or both, and an image is read-only, so the answer to
+   all of them is the same refusal. The second exists because a name that does not exist yet is not
+   carried -- nothing answers for it -- so asking only the first sends a request to create a file
+   beside a carried one straight to the machine, where the directory does not exist and the error
+   describes the wrong thing.  */
+
+static inline int
+__bfs_carries_at (int fd, const char *path)
+{
+  char resolved[PATH_MAX];
+
+  return BfsResolveAt (fd, path, resolved, sizeof resolved) && BfsCarries (resolved);
+}
+
+static inline int
+__bfs_carries_parent_at (int fd, const char *path)
+{
+  char resolved[PATH_MAX];
+
+  if (!BfsResolveAt (fd, path, resolved, sizeof resolved))
+    return 0;
+
+  char *last = NULL;
+  for (char *at = resolved; *at; at++)
+    if (*at == '/')
+      last = at;
+
+  if (last == NULL)
+    return 0;
+
+  /* The root is "/" rather than the empty string, which names nothing.  */
+  if (last == resolved)
+    resolved[1] = '\0';
+  else
+    *last = '\0';
+
+  return BfsCarries (resolved);
+}
 
 /* The two halves together, since every caller wants both and doing it in one place keeps the
    combination from being written out four times.  */

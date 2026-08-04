@@ -16,6 +16,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sysdep.h>
 
@@ -23,6 +25,15 @@
 int
 __chmod (const char *file, mode_t mode)
 {
+  /* An image is read-only, and the modes in it are the bundler's record.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, file))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifdef __NR_chmod
   return INLINE_SYSCALL_CALL (chmod, file, mode);
 #else

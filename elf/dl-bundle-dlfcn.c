@@ -29,12 +29,48 @@
 /* RTLD_DL_SYMENT and RTLD_DL_LINKMAP, which dladdr1 selects between.  */
 #include <bits/dlfcn.h>
 
+/* The flags the linker accepts, which are the ones POSIX names and nothing else.
+
+   glibc carries private bits in the same word -- __RTLD_DLOPEN above all, which every internal
+   __libc_dlopen sets -- and the linker refuses a mode holding anything it does not recognise rather
+   than ignoring it. That refusal is right: a flag it cannot honour is a request it cannot answer, and
+   silently dropping one is how a caller ends up with a library loaded on terms it did not ask for.
+
+   So they are dropped here, where what each one means is known. __RTLD_AUDIT, __RTLD_SECURE and
+   __RTLD_NOIFUNC name machinery this loader does not have.
+
+   __RTLD_DLOPEN is worth naming exactly, because it is not nothing. It says the load came from a
+   dlopen call rather than from startup or dependency resolution, and glibc hangs two refusals on
+   that: an object marked DF_1_NOOPEN may be loaded as a dependency and must be refused when
+   dlopen'd, and a module wanting an executable stack may only be given one during startup. The
+   linker enforces neither -- it has no DF_1_NOOPEN check and no stack handling -- so nothing is lost
+   by dropping the bit today.
+
+   What is lost is the ability to add either later, because after this the linker cannot tell the two
+   kinds of load apart. If that is ever wanted, the distinction should arrive as an argument to
+   OpenLibrary rather than as a flag smuggled through a word the linker validates -- the interface is
+   ours, and a caller saying why it is loading is clearer than a bit it has to know to preserve.
+
+   RTLD_DEEPBIND is dropped too and is not the same kind of thing: it asks for the library's own
+   symbols to be preferred over the global scope, and the linker has no equivalent. Dropping it loses
+   that preference rather than the load, which is the better of the two failures -- and an artifact
+   that resolves out of itself is already most of what deep binding is asked for.
+
+   Without this, every conversion iconv needs a module for is unavailable: gconv reaches its modules
+   through __libc_dlopen, the mode carries __RTLD_DLOPEN, and the linker answers "invalid flags to
+   dlopen" to a library it is perfectly able to load.  */
+static int
+bundle_open_flags (int mode)
+{
+  return mode & (RTLD_NOW | RTLD_LAZY | RTLD_NOLOAD | RTLD_GLOBAL | RTLD_NODELETE);
+}
+
 static void *
 bundle_dlopen (const char *file, int mode, void *dl_caller)
 {
   (void) dl_caller;
 
-  return GL (dl_bundle_runtime)->OpenLibrary (file, mode);
+  return GL (dl_bundle_runtime)->OpenLibrary (file, bundle_open_flags (mode));
 }
 
 static int
@@ -236,7 +272,9 @@ bundle_dlinfo (void *handle, int request, void *arg)
 static void *
 bundle_libc_dlopen_mode (const char *name, int mode)
 {
-  return GL (dl_bundle_runtime)->OpenLibrary (name, mode);
+  /* This is the one that matters for the flags: every caller here is inside libc, and libc always
+     sets __RTLD_DLOPEN.  */
+  return GL (dl_bundle_runtime)->OpenLibrary (name, bundle_open_flags (mode));
 }
 
 static void *

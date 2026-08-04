@@ -16,6 +16,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sysdep.h>
@@ -24,6 +26,15 @@
 int
 __lchown (const char *file, uid_t owner, gid_t group)
 {
+  /* See chown.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, file))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifdef __NR_lchown
   return INLINE_SYSCALL_CALL (lchown, file, owner, group);
 #else

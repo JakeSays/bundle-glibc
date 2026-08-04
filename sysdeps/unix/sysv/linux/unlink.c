@@ -16,6 +16,8 @@
    License along with the GNU C Library.  If not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sysdep.h>
@@ -24,6 +26,17 @@
 int
 __unlink (const char *name)
 {
+  /* An image is read-only. Refused here rather than left to the kernel, which is looking at a
+     filesystem this path does not name -- so it would answer about whatever sits at the same place
+     on the machine, or report that nothing does.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (AT_FDCWD, name))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifdef __NR_unlink
   return INLINE_SYSCALL_CALL (unlink, name);
 #else

@@ -16,7 +16,9 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sysdep.h>
 #include <time.h>
@@ -28,6 +30,18 @@ int
 __utimensat64_helper (int fd, const char *file,
                       const struct __timespec64 tsp64[2], int flags)
 {
+  /* An image is read-only, and its timestamps are the bundler's: they are the same in every copy of
+     the artifact, which is what makes two builds of one tree comparable. Guarded in the helper rather
+     than at each syscall below, since those are one operation reached by whichever the running kernel
+     has -- and futimens arrives here too, with the descriptor's own path.  */
+#if IS_IN (libc)
+  if (__bfs_carries_at (fd, file))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
 #ifndef __NR_utimensat_time64
 # define __NR_utimensat_time64 __NR_utimensat
 #endif
