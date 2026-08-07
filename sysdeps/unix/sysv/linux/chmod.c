@@ -27,7 +27,7 @@ __chmod (const char *file, mode_t mode)
 {
   /* An image is read-only, and the modes in it are the bundler's record.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, file))
+  if (__bfs_bundles_at (AT_FDCWD, file))
     {
       __set_errno (EROFS);
       return -1;

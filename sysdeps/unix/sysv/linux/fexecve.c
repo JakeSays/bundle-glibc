@@ -22,6 +22,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include <bundle-exec.h>
+#include <bundlefs-descriptors.h>
 #include <fd_to_filename.h>
 #include <sysdep.h>
 #include <sys/syscall.h>
@@ -38,6 +40,29 @@ fexecve (int fd, char *const argv[], char *const envp[])
       __set_errno (EINVAL);
       return -1;
     }
+
+#if IS_IN (libc)
+  /* A descriptor the image owns names a member, and the kernel cannot exec one: the number is an
+     anonymous file, or a duplicate of the artifact positioned at the member's offset.  Left alone,
+     execveat on it would run the artifact from its start -- which is to say whichever program a bare
+     launch runs, not the one this descriptor was opened for.
+
+     So the member is turned back into the program it is, by where its bytes sit, and the relaunch
+     names that.  A carried file that is not a program has nothing to name and is refused: ENOEXEC
+     rather than EACCES, since the file is readable and only exec'ing it is impossible.  */
+  if (BfsOwns (fd))
+    {
+      const char *program = __bundle_program_at (fd);
+
+      if (program == NULL)
+	{
+	  __set_errno (ENOEXEC);
+	  return -1;
+	}
+
+      return __bundle_exec_program (program, argv, envp);
+    }
+#endif
 
 #ifdef __NR_execveat
   /* Avoid implicit array coercion in syscall macros.  */

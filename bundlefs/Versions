@@ -36,5 +36,9 @@ libc {
     # Directories.
     BfsDirectoryOpen; BfsDirectoryClose;
     BfsDirectoryRead; BfsDirectorySeek;
+
+    # Where the reader's own diagnostics go. A payload that mounts an image of its own decides
+    # what happens to what the reader says about it, the same as libc does for the app's.
+    BfsSetReporter;
   }
 }

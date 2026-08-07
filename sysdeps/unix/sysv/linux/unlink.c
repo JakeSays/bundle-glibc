@@ -30,7 +30,7 @@ __unlink (const char *name)
      filesystem this path does not name -- so it would answer about whatever sits at the same place
      on the machine, or report that nothing does.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, name))
+  if (__bfs_bundles_at (AT_FDCWD, name))
     {
       __set_errno (EROFS);
       return -1;

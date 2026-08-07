@@ -18,6 +18,7 @@
 
 #define __fstatfs __fstatfs_disable
 #define fstatfs fstatfs_disable
+#include <bundlefs-descriptors.h>
 #include <sys/statfs.h>
 #include <sysdep.h>
 #include <kernel_stat.h>
@@ -28,6 +29,18 @@
 int
 __fstatfs64 (int fd, struct statfs64 *buf)
 {
+  /* See statfs64.c. The number underneath one of our descriptors is an anonymous file, so the kernel
+     would describe the tmpfs behind it -- which is neither the image nor the machine.  */
+#if IS_IN (libc)
+  BfsFileSystemInfo bundled;
+
+  if (BfsDescribeFileSystem (fd, &bundled) == 0)
+    {
+      __bfs_fill_statfs (&bundled, buf);
+      return 0;
+    }
+#endif
+
 #ifdef __NR_fstatfs64
   return INLINE_SYSCALL_CALL (fstatfs64, fd, sizeof (*buf), buf);
 #else

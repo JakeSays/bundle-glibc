@@ -29,7 +29,7 @@ __truncate (const char *path, off_t length)
   /* See ftruncate64, which answers for the same file reached by a descriptor. EROFS rather than that
      one's EBADF: there is no descriptor here to be the wrong kind.  */
 # if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, path))
+  if (__bfs_bundles_at (AT_FDCWD, path))
     {
       __set_errno (EROFS);
       return -1;

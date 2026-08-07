@@ -8,7 +8,7 @@
  *
  * Everything here is a thing every libc does and each one spells differently -- raw syscalls, one
  * lock, errno, the page size. The shared library asks for them through a table so that it compiles
- * once rather than once per libc; this is glibc's answers.
+ * once rather than once per libc; this is glibc's side of it.
  *
  * The syscalls throughout rather than the public entry points, and both reasons are load bearing.
  *
@@ -36,6 +36,8 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/statvfs.h>
 #include <sysdep.h>
 
 static int64_t
@@ -159,6 +161,20 @@ bfs_release_lock (void)
   __libc_lock_unlock (bfs_lock);
 }
 
+/* Handed on to the linker, which has the switch and the only place in the process that is not the
+   payload's own output. Silent when there is no linker -- glibc outside an artifact reads no images,
+   and a message with nowhere to go is not written where it would be mistaken for the payload's.  */
+static void
+bfs_report (const char *message)
+{
+  const struct RuntimeInterface *runtime = GL (dl_bundle_runtime);
+
+  if (runtime == NULL || runtime->Report == NULL)
+    return;
+
+  runtime->Report (message);
+}
+
 static const BfsPlatformInterface bfs_platform =
   {
     .Io =
@@ -177,6 +193,7 @@ static const BfsPlatformInterface bfs_platform =
     .PageSize = bfs_page_size,
     .Lock = bfs_take_lock,
     .Unlock = bfs_release_lock,
+    .Report = bfs_report,
   };
 
 /* Called from __libc_early_init, after malloc, which §4.1 of design/bundle-format.md argues for: the
@@ -194,7 +211,7 @@ __bfs_early_init (void)
    image has no basis for inventing, and the two libcs do not spell the structure the same way.
 
    No device or inode, then. What a caller usually wants them for -- telling two files apart -- is
-   answered by the descriptor's own identity where there is one.  */
+   covered by the descriptor's own identity where there is one.  */
 static unsigned int
 bfs_format_bits (const BfsFileInfo *info)
 {
@@ -228,9 +245,42 @@ __bfs_fill_stat (const BfsFileInfo *info, struct stat64 *buffer)
   buffer->st_blocks = (blkcnt64_t) ((info->Size + 511) / 512);
 }
 
+/* The image itself, in the shape statfs asked for. statvfs is derived from statfs in this libc, so
+   this one fill serves all four of statfs, fstatfs, statvfs and fstatvfs.
+
+   Free space is zero rather than unknown: an image is fixed at the size it was built, so a caller
+   asking what it could write there is being told the truth. ST_RDONLY is the field that matters, and
+   __internal_statvfs carries it across as f_flag ^ ST_VALID -- so ST_VALID is set here too, or
+   statvfs would report a read-write filesystem for a read-only one.  */
+void
+__bfs_fill_statfs (const BfsFileSystemInfo *info, struct statfs64 *buffer)
+{
+  memset (buffer, 0, sizeof (*buffer));
+
+  buffer->f_type = 0xE0F5E1E2;
+  buffer->f_bsize = info->BlockSize;
+  buffer->f_frsize = info->BlockSize;
+  buffer->f_blocks = info->Blocks;
+  buffer->f_bfree = 0;
+  buffer->f_bavail = 0;
+  buffer->f_files = info->Files;
+  buffer->f_ffree = 0;
+  buffer->f_namelen = info->NameMaximum;
+
+  /* The kernel's own bit for "these flags mean something", which __internal_statvfs strips back off
+     with an exclusive or on its way to statvfs. Spelled here as internal_statvfs.c spells it, since
+     it is the kernel's statfs interface rather than statvfs's and <sys/statvfs.h> does not name
+     it.  */
+#ifndef ST_VALID
+# define ST_VALID 0x0020
+#endif
+
+  buffer->f_flags = ST_VALID | ST_RDONLY;
+}
+
 /* statx asks what it wants by mask and is told what it got the same way, so the device and inode are
    left out of stx_mask rather than filled with something invented. A caller that asked for them sees
-   they were not answered, which is what the mask is for.  */
+   they were not filled, which is what the mask is for.  */
 void
 __bfs_fill_statx (const BfsFileInfo *info, struct statx *buffer)
 {

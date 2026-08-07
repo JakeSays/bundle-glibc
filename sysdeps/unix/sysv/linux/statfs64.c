@@ -18,6 +18,7 @@
 
 #define __statfs __statfs_disable
 #define statfs statfs_disable
+#include <bundlefs-descriptors.h>
 #include <sys/statfs.h>
 #include <sysdep.h>
 #include <kernel_stat.h>
@@ -28,6 +29,22 @@
 int
 __statfs64 (const char *file, struct statfs64 *buf)
 {
+  /* An image, when the path is in one. Everything above this reaches statfs -- statvfs is derived
+     from it, and so is every fstatvfs -- so the whole family is served by filling it here.
+
+     Left to the kernel, a bundled path is described by whichever filesystem sits at the same place
+     outside the artifact: its size, its free space, and whether it can be written to. The last is
+     the one a program acts on, and it is the one that would be wrong.  */
+#if IS_IN (libc)
+  BfsFileSystemInfo bundled;
+
+  if (BfsDescribeFileSystemPath (file, &bundled) == 0)
+    {
+      __bfs_fill_statfs (&bundled, buf);
+      return 0;
+    }
+#endif
+
 #ifdef __NR_statfs64
   return INLINE_SYSCALL_CALL (statfs64, file, sizeof (*buf), buf);
 #else

@@ -28,7 +28,7 @@ __lchown (const char *file, uid_t owner, gid_t group)
 {
   /* See chown.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, file))
+  if (__bfs_bundles_at (AT_FDCWD, file))
     {
       __set_errno (EROFS);
       return -1;

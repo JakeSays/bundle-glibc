@@ -29,8 +29,8 @@ __link (const char *from, const char *to)
   /* Both sides, unlike symlink. A hard link needs the file itself on the other end, and a carried one
      is a record in an image rather than an inode anything can point a second name at.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, from) || __bfs_carries_at (AT_FDCWD, to)
-      || __bfs_carries_parent_at (AT_FDCWD, to))
+  if (__bfs_bundles_at (AT_FDCWD, from) || __bfs_bundles_at (AT_FDCWD, to)
+      || __bfs_bundles_parent_at (AT_FDCWD, to))
     {
       __set_errno (EROFS);
       return -1;

@@ -62,6 +62,14 @@ __libc_open64 (const char *file, int oflag, ...)
 		      : EIO));
       return -1;
     }
+
+  /* Not carried, and the reason is the artifact's to give: a prefix component it carries that is not
+     a directory is ENOTDIR wherever it is asked.  */
+  if (__bfs_reason_missing (file) == ENOTDIR)
+    {
+      __set_errno (ENOTDIR);
+      return -1;
+    }
 #endif
 
   return SYSCALL_CANCEL (openat, AT_FDCWD, file, oflag | O_LARGEFILE,

@@ -29,7 +29,7 @@ __chown (const char *file, uid_t owner, gid_t group)
   /* An image is read-only, and the ownership in it is the bundler's record -- it says who built the
      artifact, not who is running it.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, file))
+  if (__bfs_bundles_at (AT_FDCWD, file))
     {
       __set_errno (EROFS);
       return -1;

@@ -1,5 +1,5 @@
-/* Create a directory.  Linux version.
-   Copyright (C) 2011-2026 Free Software Foundation, Inc.
+/* Change the current working directory to a descriptor.  Linux version.
+   Copyright (C) 2026 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -18,30 +18,25 @@
 
 #include <bundlefs-descriptors.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <sys/stat.h>
+#include <unistd.h>
 #include <sysdep.h>
 
-/* Create a directory named PATH with protections MODE.  */
 int
-__mkdir (const char *path, mode_t mode)
+__fchdir (int fd)
 {
-  /* Either the name is one the image already answers for, or the directory it would go in is. The
-     second is the one a program actually asks for -- making a directory beside carried content.  */
+  /* See chdir.c. ENOTDIR rather than EACCES because what arrives here is a descriptor: the number
+     underneath one of ours names an anonymous file, which is not a directory, and that is what the
+     kernel would say about it if it could see what the caller means. musl refuses it the same way,
+     with the same error.  */
 #if IS_IN (libc)
-  if (__bfs_bundles_at (AT_FDCWD, path) || __bfs_bundles_parent_at (AT_FDCWD, path))
+  if (BfsOwns (fd))
     {
-      __set_errno (EROFS);
+      __set_errno (ENOTDIR);
       return -1;
     }
 #endif
 
-#ifdef __NR_mkdir
-  return INLINE_SYSCALL_CALL (mkdir,  path, mode);
-#else
-  return INLINE_SYSCALL_CALL (mkdirat, AT_FDCWD, path, mode);
-#endif
+  return INLINE_SYSCALL_CALL (fchdir, fd);
 }
 
-libc_hidden_def (__mkdir)
-weak_alias (__mkdir, mkdir)
+weak_alias (__fchdir, fchdir)

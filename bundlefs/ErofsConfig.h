@@ -12,7 +12,7 @@
 
    Nothing is probed. Every question below is a question about the platform, and this is the one
    build where the platform is known in advance -- it is glibc, on Linux, being compiled by the
-   compiler that is about to build the rest of libc. bundlefs generates the same answers with cmake
+   compiler that is about to build the rest of libc. bundlefs generates the same settings with cmake
    for builds that could be anywhere.  */
 
 #ifndef _BUNDLEFS_EROFS_CONFIG_H

@@ -35,7 +35,7 @@ __utimensat64_helper (int fd, const char *file,
      than at each syscall below, since those are one operation reached by whichever the running kernel
      has -- and futimens arrives here too, with the descriptor's own path.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (fd, file))
+  if (__bfs_bundles_at (fd, file))
     {
       __set_errno (EROFS);
       return -1;

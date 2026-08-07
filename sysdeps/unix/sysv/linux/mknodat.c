@@ -16,6 +16,8 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+#include <bundlefs-descriptors.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -24,6 +26,17 @@
 int
 __mknodat (int fd, const char *path, mode_t mode, dev_t dev)
 {
+  /* The same pair mkdir checks: the name itself, or the directory it would go in. mkfifo arrives
+     here, which is how a named pipe beside bundled content is refused rather than being created on
+     the machine at a path the artifact claimed.  */
+#if IS_IN (libc)
+  if (__bfs_bundles_at (fd, path) || __bfs_bundles_parent_at (fd, path))
+    {
+      __set_errno (EROFS);
+      return -1;
+    }
+#endif
+
   /* The user-exported dev_t is 64-bit while the kernel interface is
      32-bit.  */
   unsigned int k_dev = dev;

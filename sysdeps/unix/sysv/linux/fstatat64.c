@@ -163,9 +163,17 @@ __fstatat64_time64 (int fd, const char *file, struct __stat64_t64 *buf,
     {
       char resolved[PATH_MAX];
 
-      if (BfsResolveAt (fd, file, resolved, sizeof (resolved))
-	  && __bfs_stat_path (resolved, buf) == 0)
-	return 0;
+      if (BfsResolveAt (fd, file, resolved, sizeof (resolved)))
+	{
+	  if (__bfs_stat_path (resolved, buf) == 0)
+	    return 0;
+
+	  /* A prefix component the artifact carries and that is not a directory. The artifact has an
+	     result here and it is not "missing": the machine has never heard of these paths and would
+	     say ENOENT, which sends a caller looking for a file that is there.  */
+	  if (__bfs_reason_missing (resolved) == ENOTDIR)
+	    return INLINE_SYSCALL_ERROR_RETURN_VALUE (ENOTDIR);
+	}
     }
 #endif
 

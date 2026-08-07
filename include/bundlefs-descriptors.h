@@ -8,7 +8,7 @@
  *
  * The table itself is libBfsRuntime, shared with the other libc and knowing nothing about glibc. This
  * is the glibc side of it: the visibility the wrappers need, and the four stat forms, which cannot be
- * shared because filling a struct stat is the job of whoever is answering a stat call.  */
+ * shared because filling a struct stat is the job of whoever is serving a stat call.  */
 
 #ifndef _BUNDLEFS_DESCRIPTORS_H
 #define _BUNDLEFS_DESCRIPTORS_H 1
@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/types.h>
 
 struct statx;
@@ -42,25 +43,30 @@ extern void __bfs_early_init (void) attribute_hidden;
 extern void __bfs_fill_stat (const BfsFileInfo *info, struct stat64 *buffer) attribute_hidden;
 extern void __bfs_fill_statx (const BfsFileInfo *info, struct statx *buffer) attribute_hidden;
 
-/* Whether a path names something the image carries, resolved the way the *at family resolves it, and
-   whether it would put something new inside a directory the image carries.
+/* And the image itself, in the shape statfs asked for. statvfs is derived from statfs here, so this
+   one fill serves statfs, fstatfs, statvfs and fstatvfs.  */
+extern void __bfs_fill_statfs (const BfsFileSystemInfo *info, struct statfs64 *buffer)
+  attribute_hidden;
 
-   Every wrapper that can change a file needs one or both, and an image is read-only, so the answer to
-   all of them is the same refusal. The second exists because a name that does not exist yet is not
-   carried -- nothing answers for it -- so asking only the first sends a request to create a file
-   beside a carried one straight to the machine, where the directory does not exist and the error
+/* Whether a path names something the image bundles, resolved the way the *at family resolves it, and
+   whether it would put something new inside a directory the image bundles.
+
+   Every wrapper that can change a file needs one or both, and an image is read-only, so the result
+   for all of them is the same refusal. The second exists because a name that does not exist yet is
+   not bundled -- nothing resolves it -- so asking only the first sends a request to create a file
+   beside a bundled one straight to the machine, where the directory does not exist and the error
    describes the wrong thing.  */
 
 static inline int
-__bfs_carries_at (int fd, const char *path)
+__bfs_bundles_at (int fd, const char *path)
 {
   char resolved[PATH_MAX];
 
-  return BfsResolveAt (fd, path, resolved, sizeof resolved) && BfsCarries (resolved);
+  return BfsResolveAt (fd, path, resolved, sizeof resolved) && BfsBundles (resolved);
 }
 
 static inline int
-__bfs_carries_parent_at (int fd, const char *path)
+__bfs_bundles_parent_at (int fd, const char *path)
 {
   char resolved[PATH_MAX];
 
@@ -81,7 +87,7 @@ __bfs_carries_parent_at (int fd, const char *path)
   else
     *last = '\0';
 
-  return BfsCarries (resolved);
+  return BfsBundles (resolved);
 }
 
 /* The two halves together, since every caller wants both and doing it in one place keeps the
@@ -92,12 +98,27 @@ __bfs_stat_path (const char *path, struct stat64 *buffer)
 {
   BfsFileInfo info;
 
-  if (!BfsDescribePath (path, &info))
+  if (BfsDescribePath (path, &info) != 0)
     return -1;
 
   __bfs_fill_stat (&info, buffer);
 
   return 0;
+}
+
+/* Why a carried path could not be described, as a positive errno, or zero when it could.
+ *
+ * Only ENOTDIR is acted on and the rest fall through as they always did: it is the one reason that
+ * says the artifact has something to report -- a prefix component is a file it carries -- where every other
+ * failure means the artifact has nothing to say and the machine should be asked.  */
+static inline int
+__bfs_reason_missing (const char *path)
+{
+  BfsFileInfo info;
+
+  const int found = BfsDescribePath (path, &info);
+
+  return found < 0 ? -found : 0;
 }
 
 static inline int
@@ -118,7 +139,7 @@ __bfs_statx_path (const char *path, struct statx *buffer)
 {
   BfsFileInfo info;
 
-  if (!BfsDescribePath (path, &info))
+  if (BfsDescribePath (path, &info) != 0)
     return -1;
 
   __bfs_fill_statx (&info, buffer);

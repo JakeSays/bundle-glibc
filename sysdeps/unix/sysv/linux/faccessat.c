@@ -41,15 +41,24 @@ __faccessat (int fd, const char *file, int mode, int flag)
       char resolved[PATH_MAX];
       struct stat64 described;
 
-      if (BfsResolveAt (fd, file, resolved, sizeof (resolved))
-	  && __bfs_stat_path (resolved, &described) == 0)
+      if (BfsResolveAt (fd, file, resolved, sizeof (resolved)))
 	{
-	  if ((mode & X_OK) == 0
-	      || (described.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0)
-	    return 0;
+	  if (__bfs_stat_path (resolved, &described) == 0)
+	    {
+	      if ((mode & X_OK) == 0
+		  || (described.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0)
+		return 0;
 
-	  __set_errno (EACCES);
-	  return -1;
+	      __set_errno (EACCES);
+	      return -1;
+	    }
+
+	  /* Not carried, and the reason is the artifact's to give -- see open64.c.  */
+	  if (__bfs_reason_missing (resolved) == ENOTDIR)
+	    {
+	      __set_errno (ENOTDIR);
+	      return -1;
+	    }
 	}
     }
 #endif

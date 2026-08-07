@@ -35,7 +35,7 @@ __truncate64 (const char *path, off64_t length)
      This is where truncate itself arrives wherever off_t is off64_t, which is every machine this is
      built for -- truncate.c holds the other case and compiles to nothing here.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, path))
+  if (__bfs_bundles_at (AT_FDCWD, path))
     {
       __set_errno (EROFS);
       return -1;

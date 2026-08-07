@@ -66,6 +66,13 @@ __libc_openat64 (int fd, const char *file, int oflag, ...)
 			  : EIO));
 	  return -1;
 	}
+
+      /* Not carried, and the reason is the artifact's to give -- see open64.c.  */
+      if (__bfs_reason_missing (resolved) == ENOTDIR)
+	{
+	  __set_errno (ENOTDIR);
+	  return -1;
+	}
     }
 #endif
 

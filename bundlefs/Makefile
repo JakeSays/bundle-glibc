@@ -16,7 +16,7 @@ subdir := bundlefs
 include ../Makeconfig
 
 bundlefs-dir := $(..)third_party/bundlefs
-erofs-dir := $(bundlefs-dir)/third_party/erofs-utils
+erofs-dir := $(bundlefs-dir)/erofs
 
 # Reached the way elf/ reaches ../locale/programs.
 vpath %.c $(bundlefs-dir)/lib
@@ -29,6 +29,7 @@ bundlefs-routines := \
   BfsFile \
   BfsFileSystem \
   BfsImage \
+  BfsMessages \
   ErofsWriteStubs \
   # bundlefs-routines
 

@@ -29,7 +29,7 @@ __symlink (const char *from, const char *to)
   /* Only where the link would be created. What it points at is a string the link stores and never
      resolves here, so a target inside the image is a target like any other.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, to) || __bfs_carries_parent_at (AT_FDCWD, to))
+  if (__bfs_bundles_at (AT_FDCWD, to) || __bfs_bundles_parent_at (AT_FDCWD, to))
     {
       __set_errno (EROFS);
       return -1;

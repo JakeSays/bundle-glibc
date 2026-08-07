@@ -112,6 +112,14 @@ __opendir (const char *name)
       __set_errno (ENOTDIR);
       return NULL;
     }
+
+  /* And a path running through a carried file rather than to one, which is the same statement made
+     one component earlier -- see open64.c.  */
+  if (__bfs_reason_missing (name) == ENOTDIR)
+    {
+      __set_errno (ENOTDIR);
+      return NULL;
+    }
 #endif
 
   return opendir_tail (__open_nocancel (name, opendir_oflags));

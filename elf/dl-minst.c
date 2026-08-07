@@ -642,11 +642,23 @@ _dl_minst_check_scopes (const char *when)
 bool
 _dl_minst_main (struct minst_member *member)
 {
-  if (minst_note == NULL || minst_note->program_size == 0)
+  if (minst_note == NULL || minst_note->program_count == 0)
     return false;
 
-  member->offset = minst_note->program_offset;
-  member->size = minst_note->program_size;
+  /* Index zero, which is the one a bare launch runs.
+
+     This is glibc's own loader path, reached when ld.so is the loader rather than the bundle linker,
+     and it does not read the program selector -- so an artifact of several programs started through
+     here always gets the first.  */
+  const struct BundledProgram *program
+    = (const struct BundledProgram *) ((const char *) minst_note
+				       + minst_note->program_offset);
+
+  if (program->size == 0)
+    return false;
+
+  member->offset = program->offset;
+  member->size = program->size;
   /* The program, which is loaded once into the base namespace and is nothing's dependency.  */
   member->unique = false;
   return true;

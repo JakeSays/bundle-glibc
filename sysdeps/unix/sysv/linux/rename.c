@@ -30,8 +30,8 @@ rename (const char *old, const char *new)
      to forget it, and a carried destination -- or a new name in a carried directory -- is a place the
      image already answers for.  */
 #if IS_IN (libc)
-  if (__bfs_carries_at (AT_FDCWD, old) || __bfs_carries_at (AT_FDCWD, new)
-      || __bfs_carries_parent_at (AT_FDCWD, new))
+  if (__bfs_bundles_at (AT_FDCWD, old) || __bfs_bundles_at (AT_FDCWD, new)
+      || __bfs_bundles_parent_at (AT_FDCWD, new))
     {
       __set_errno (EROFS);
       return -1;

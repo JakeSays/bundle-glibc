@@ -25,15 +25,16 @@ readlinkat (int fd, const char *path, char *buffer, size_t length)
 
   if (BfsResolveAt (fd, path, resolved, sizeof (resolved)))
     {
-      ssize_t carried = BfsReadLinkPath (resolved, buffer, length);
+      ssize_t bundled = BfsReadLinkPath (resolved, buffer, length);
 
-      if (carried >= 0)
-	return carried;
+      if (bundled >= 0)
+	return bundled;
 
-      /* Carried, but not a link. EINVAL rather than the kernel's ENOENT -- see readlink.c.  */
-      if (BfsCarries (resolved))
+      /* Bundled, and the reader said why not -- EINVAL for something that is not a link, rather than
+	 the kernel's ENOENT, which means something else entirely. See readlink.c.  */
+      if (BfsBundles (resolved))
 	{
-	  __set_errno (EINVAL);
+	  __set_errno ((int) -bundled);
 	  return -1;
 	}
     }
