@@ -206,6 +206,29 @@ __bfs_early_init (void)
   BfsRuntimeInitialize (&bfs_platform, GL (dl_bundle_runtime));
 }
 
+/* Whether the artifact answers for this path to the exclusion of the machine.
+ *
+ * Asked by every routed wrapper before a path it could not serve is allowed to fall through to the
+ * kernel. The artifact declared what is at that path, so a file the machine happens to have there is
+ * not a fallback -- it is a different object wearing the artifact's name.
+ *
+ * Here rather than inline beside the wrappers because the loader is what knows: it read the mount
+ * records and it is the half that already walks them. Reaching it needs ldsodefs.h, which this file
+ * includes and the wrappers do not.
+ *
+ * False for a mount the manifest opened with host-access="open", and false with no artifact at all,
+ * which is what leaves an ordinary glibc behaving as it always did.  */
+int
+__bfs_claims (const char *path)
+{
+  const struct RuntimeInterface *runtime = GL (dl_bundle_runtime);
+
+  if (path == NULL || runtime == NULL || runtime->ClaimsPath == NULL)
+    return 0;
+
+  return runtime->ClaimsPath (path) != 0;
+}
+
 /* What the image knows, in the shape a caller of stat asked for. These stay here rather than moving
    with the rest: a stat needs a device and inode meaning something in this process's world, which an
    image has no basis for inventing, and the two libcs do not spell the structure the same way.

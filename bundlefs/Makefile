@@ -29,7 +29,9 @@ bundlefs-routines := \
   BfsFile \
   BfsFileSystem \
   BfsImage \
+  BfsLookup \
   BfsMessages \
+  BfsPath \
   ErofsWriteStubs \
   # bundlefs-routines
 

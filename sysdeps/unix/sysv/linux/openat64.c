@@ -53,6 +53,19 @@ __libc_openat64 (int fd, const char *file, int oflag, ...)
       if (carried >= 0)
 	return carried;
 
+      /* O_NOFOLLOW on a name the image has a link at -- see open64.c. Ahead of the block below,
+	 which follows and would describe the target.  */
+      if ((oflag & O_NOFOLLOW) != 0)
+	{
+	  struct stat64 link;
+
+	  if (__bfs_lstat_path (resolved, &link) == 0 && S_ISLNK (link.st_mode))
+	    {
+	      __set_errno (ELOOP);
+	      return -1;
+	    }
+	}
+
       /* Carried, but not openable this way -- see open64.c for why this is answered here rather
 	 than fallen through to a kernel that has never heard of the path.  */
       struct stat64 described;
@@ -71,6 +84,13 @@ __libc_openat64 (int fd, const char *file, int oflag, ...)
       if (__bfs_reason_missing (resolved) == ENOTDIR)
 	{
 	  __set_errno (ENOTDIR);
+	  return -1;
+	}
+
+      /* Not carried, and under a mount the artifact keeps to itself -- see open64.c.  */
+      if (__bfs_claims (resolved))
+	{
+	  __set_errno (ENOENT);
 	  return -1;
 	}
     }

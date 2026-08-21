@@ -39,6 +39,18 @@ struct statx;
 /* Brings the filesystem up. Called from __libc_early_init.  */
 extern void __bfs_early_init (void) attribute_hidden;
 
+/* Whether the artifact answers for this path to the exclusion of the machine -- it lies under one of
+   the artifact's mounts, and that mount was not opened to the machine with host-access="open".
+
+   Asked after a routed wrapper has failed to serve a path and before it falls through to the kernel.
+   The artifact stated what is at that path, so what the machine has there is a different object
+   wearing the artifact's name rather than a fallback. A claimed path that the artifact does not hold
+   is ENOENT, which is what the machine would have said for a file that is not there -- the difference
+   is that it is now true regardless of what is on the machine.
+
+   Zero with no artifact, which leaves an ordinary glibc behaving as it always did.  */
+extern int __bfs_claims (const char *path) attribute_hidden;
+
 /* What the image knows, in the shape a caller of stat or statx asked for.  */
 extern void __bfs_fill_stat (const BfsFileInfo *info, struct stat64 *buffer) attribute_hidden;
 extern void __bfs_fill_statx (const BfsFileInfo *info, struct statx *buffer) attribute_hidden;
@@ -106,6 +118,25 @@ __bfs_stat_path (const char *path, struct stat64 *buffer)
   return 0;
 }
 
+/* The same for a caller that was told not to follow the last component: lstat, and a stat carrying
+   AT_SYMLINK_NOFOLLOW.
+
+   Which one a wrapper uses is not a preference. Following where the caller said not to reports the
+   target's size, mode and type in place of the link's, and nothing about that is visible until
+   something walks a tree -- find, cp -a and ls -l each read the difference and act on it.  */
+static inline int
+__bfs_lstat_path (const char *path, struct stat64 *buffer)
+{
+  BfsFileInfo info;
+
+  if (BfsDescribeLinkPath (path, &info) != 0)
+    return -1;
+
+  __bfs_fill_stat (&info, buffer);
+
+  return 0;
+}
+
 /* Why a carried path could not be described, as a positive errno, or zero when it could.
  *
  * Only ENOTDIR is acted on and the rest fall through as they always did: it is the one reason that
@@ -140,6 +171,19 @@ __bfs_statx_path (const char *path, struct statx *buffer)
   BfsFileInfo info;
 
   if (BfsDescribePath (path, &info) != 0)
+    return -1;
+
+  __bfs_fill_statx (&info, buffer);
+
+  return 0;
+}
+
+static inline int
+__bfs_lstatx_path (const char *path, struct statx *buffer)
+{
+  BfsFileInfo info;
+
+  if (BfsDescribeLinkPath (path, &info) != 0)
     return -1;
 
   __bfs_fill_statx (&info, buffer);

@@ -120,6 +120,15 @@ __opendir (const char *name)
       __set_errno (ENOTDIR);
       return NULL;
     }
+
+  /* Under a mount the artifact keeps to itself, and it holds no directory here. Listing the
+     machine's would be reading somebody else's directory under the artifact's own name, which is the
+     shape this whole check exists for -- see open64.c.  */
+  if (__bfs_claims (name))
+    {
+      __set_errno (ENOENT);
+      return NULL;
+    }
 #endif
 
   return opendir_tail (__open_nocancel (name, opendir_oflags));

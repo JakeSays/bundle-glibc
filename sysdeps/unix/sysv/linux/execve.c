@@ -85,7 +85,7 @@ __bundle_exec_route (const char *path)
       if (runtime->IsProgram != NULL && runtime->IsProgram (path) != 0)
 	return bundle_exec_relaunch;
 
-      if (runtime->IsInView != NULL && runtime->IsInView (path) != 0)
+      if (runtime->ClaimsPath != NULL && runtime->ClaimsPath (path) != 0)
 	return bundle_exec_absent;
     }
 #endif

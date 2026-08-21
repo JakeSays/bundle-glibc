@@ -165,7 +165,15 @@ __fstatat64_time64 (int fd, const char *file, struct __stat64_t64 *buf,
 
       if (BfsResolveAt (fd, file, resolved, sizeof (resolved)))
 	{
-	  if (__bfs_stat_path (resolved, buf) == 0)
+	  /* AT_SYMLINK_NOFOLLOW is what separates lstat from stat, and it reaches here as a flag on
+	     the same call. Reading it is not optional now that the image follows links: without it
+	     lstat would describe whatever the link points at, and a caller walking a tree would
+	     descend through links it asked not to.  */
+	  const int described = (flag & AT_SYMLINK_NOFOLLOW) != 0
+				? __bfs_lstat_path (resolved, buf)
+				: __bfs_stat_path (resolved, buf);
+
+	  if (described == 0)
 	    return 0;
 
 	  /* A prefix component the artifact carries and that is not a directory. The artifact has an
@@ -173,6 +181,11 @@ __fstatat64_time64 (int fd, const char *file, struct __stat64_t64 *buf,
 	     say ENOENT, which sends a caller looking for a file that is there.  */
 	  if (__bfs_reason_missing (resolved) == ENOTDIR)
 	    return INLINE_SYSCALL_ERROR_RETURN_VALUE (ENOTDIR);
+
+	  /* Under a mount the artifact keeps to itself, and it does not hold this. Nothing is there,
+	     whatever the machine has at the same name -- see open64.c.  */
+	  if (__bfs_claims (resolved))
+	    return INLINE_SYSCALL_ERROR_RETURN_VALUE (ENOENT);
 	}
     }
 #endif

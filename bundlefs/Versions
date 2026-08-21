@@ -31,7 +31,7 @@ libc {
     BfsFileInformation; BfsFileMap; BfsFileExtent;
 
     # Paths, answered without opening anything.
-    BfsFileSystemStat; BfsFileSystemReadLink;
+    BfsFileSystemStat; BfsFileSystemLinkStat; BfsFileSystemReadLink;
 
     # Directories.
     BfsDirectoryOpen; BfsDirectoryClose;

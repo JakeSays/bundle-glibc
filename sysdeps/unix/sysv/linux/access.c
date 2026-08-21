@@ -53,6 +53,13 @@ __access (const char *file, int type)
 	  __set_errno (ENOTDIR);
 	  return -1;
 	}
+
+      /* Under a mount the artifact keeps to itself, and it does not hold this -- see open64.c.  */
+      if (__bfs_claims (file))
+	{
+	  __set_errno (ENOENT);
+	  return -1;
+	}
     }
 #endif
 

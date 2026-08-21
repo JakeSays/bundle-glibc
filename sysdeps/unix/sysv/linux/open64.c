@@ -48,6 +48,23 @@ __libc_open64 (const char *file, int oflag, ...)
   if (carried >= 0)
     return carried;
 
+  /* O_NOFOLLOW on a name the image has a link at. The link is there and it is what was asked about,
+     so this is ELOOP and not a miss -- which is what the kernel says for the same request, and what a
+     caller passing this flag is written to expect.
+
+     Ahead of the block below because that one follows: it would describe whatever the link points at
+     and report EIO for a file that is not the one in question.  */
+  if ((oflag & O_NOFOLLOW) != 0)
+    {
+      struct stat64 link;
+
+      if (__bfs_lstat_path (file, &link) == 0 && S_ISLNK (link.st_mode))
+	{
+	  __set_errno (ELOOP);
+	  return -1;
+	}
+    }
+
   /* Carried, but not openable this way. Answered here rather than fallen through: the kernel has
      never heard of these paths and says ENOENT, which is a different statement -- the file is there
      and the request is what is wrong. Reporting otherwise sends a caller looking for a missing file.  */
@@ -68,6 +85,15 @@ __libc_open64 (const char *file, int oflag, ...)
   if (__bfs_reason_missing (file) == ENOTDIR)
     {
       __set_errno (ENOTDIR);
+      return -1;
+    }
+
+  /* Not carried, and under a mount the artifact keeps to itself. The artifact declared this path, so
+     there is nothing here -- and asking the kernel would resolve a name in the artifact's own view
+     against a file it knows nothing about.  */
+  if (__bfs_claims (file))
+    {
+      __set_errno (ENOENT);
       return -1;
     }
 #endif

@@ -59,6 +59,13 @@ __faccessat (int fd, const char *file, int mode, int flag)
 	      __set_errno (ENOTDIR);
 	      return -1;
 	    }
+
+	  /* Under a mount the artifact keeps to itself -- see open64.c.  */
+	  if (__bfs_claims (resolved))
+	    {
+	      __set_errno (ENOENT);
+	      return -1;
+	    }
 	}
     }
 #endif

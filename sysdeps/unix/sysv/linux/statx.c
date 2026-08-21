@@ -40,9 +40,22 @@ statx (int fd, const char *path, int flags,
     {
       char resolved[PATH_MAX];
 
-      if (BfsResolveAt (fd, path, resolved, sizeof (resolved))
-	  && __bfs_statx_path (resolved, buf) == 0)
-	return 0;
+      if (BfsResolveAt (fd, path, resolved, sizeof (resolved)))
+	{
+	  /* AT_SYMLINK_NOFOLLOW, for the same reason fstatat reads it: this is the call lstat is
+	     built on in a tree that has statx, so following here would make lstat describe the
+	     target.  */
+	  const int described = (flags & AT_SYMLINK_NOFOLLOW) != 0
+				? __bfs_lstatx_path (resolved, buf)
+				: __bfs_statx_path (resolved, buf);
+
+	  if (described == 0)
+	    return 0;
+
+	  /* Under a mount the artifact keeps to itself, and it does not hold this -- see open64.c.  */
+	  if (__bfs_claims (resolved))
+	    return INLINE_SYSCALL_ERROR_RETURN_VALUE (ENOENT);
+	}
     }
 #endif
 
